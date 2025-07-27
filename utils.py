@@ -1,44 +1,4 @@
-import requests
-import time
-import json
-import os
-import re
-import math
-from web3 import Web3
-from datetime import datetime
-from moralis import evm_api
-from eth_utils import keccak
-from urllib.parse import urlencode
-from goplus.token import Token
-from typing import Dict
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from tqdm import tqdm
-
-
-#pass smellytokens2025 or Smelly@tokens2025 (infura)
-ETHERSCAN_API_KEY = "YI5IUPU68CCB5AWVF8TP3T2BKY9FXW4QUH"
-BSCSCAN_API_KEY = "IZJXB2H1EYWQ41PSSXC5HE4FMPS58KKPCZ"
-MORALIS_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6IjhmNjk4NzNlLTUzZjktNGUxNi05Yzk2LTViODM0OGQ3Y2RmMSIsIm9yZ0lkIjoiNDQzMjE0IiwidXNlcklkIjoiNDU2MDA5IiwidHlwZUlkIjoiZDc3NTRlMTctYWNhZi00NWU1LWJlMjEtZDQ0MjM4ZGMxZDZhIiwidHlwZSI6IlBST0pFQ1QiLCJpYXQiOjE3NDUzMTI1ODEsImV4cCI6NDkwMTA3MjU4MX0.TjBrdK-dzF9t5nRmQImzIenGGYussYsaqzKr7E_oXsc"
-DE_FI_KEY = "01f0c32c50f8423fbecda88260014f1e"
-INFURA = "604e06a07adb4e4990bc4779bf8f4fa6" 
-GOLDRUSH = "cqt_rQggFbfcQcgR3vMG74KGdk4fpVxq"
-#url = "https:///v3/604e06a07adb4e4990bc4779bf8f4fa6"
-
-TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-#keccak256("Transfer(address,address,uint256)")
-
-GOOD_TOKEN_ADDRESS = "0x55d398326f99059fF775485246999027B3197955"
-BAD_TOKEN_ADDRESS = "0x15b874ADB2a0505579C46138Fb260a40A4BdFA94"
-BAD_TOKEN_ADDRESS2 = "0x1d12b80341e40f763503117a2a57eababd4040c2" #OPEN dao token
-
-BASE_URL_BSC = "https://api.bscscan.com/api"
-BASE_URL_ETH = "https://api.etherscan.io/api"
-
-#RPC_BSC = "https://bsc-dataseed.binance.org/"
-RPC_BSC = "https://rpc.ankr.com/bsc/593a18aac4d0ae56b4f6dfcc2785e56d01515b0bcd30d6d52c9645b65cd1df95"
-RPC_ETH = "https://cloudflare-eth.com"
-
-DEBUG = False
+import config
 
 """----------------------------------------"""
 #HELPER FUNCTIONS
@@ -46,7 +6,7 @@ def debug_print(*args, **kwargs):
     """
     Print only if global DEBUG flag is set to True
     """
-    if DEBUG:
+    if config.DEBUG:
         print(*args,**kwargs)
 
 def api_call(params: dict, chain: str = 'eth'):
@@ -61,17 +21,17 @@ def api_call(params: dict, chain: str = 'eth'):
     """    
 
     if chain == 'bsc':
-        params['apikey'] = BSCSCAN_API_KEY
-        base = BASE_URL_BSC
+        params['apikey'] = config.BSCSCAN_API_KEY
+        base = config.BASE_URL_BSC
     elif chain == 'eth':
-        params['apikey'] = ETHERSCAN_API_KEY
-        base = BASE_URL_ETH
-    url = f"{base}?{urlencode(params)}"
+        params['apikey'] = config.ETHERSCAN_API_KEY
+        base = config.BASE_URL_ETH
+    url = f"{base}?{config.urlencode(params)}"
     try:
-        res = requests.get(url)#, timeout=10)
+        res = config.requests.get(url)#, timeout=10)
         res.raise_for_status()
         return res.json()
-    except (requests.RequestException, ValueError) as e:
+    except (config.requests.RequestException, ValueError) as e:
         print(f"API call error: {e}")
         return None
 
@@ -100,7 +60,7 @@ def get_token_name(token_address: str, chain: str) -> str:
     if result and result != '0x':
         try:
             raw = bytes.fromhex(result[2:])
-            name = Web3.to_text(raw[64:]).rstrip('\x00')
+            name = config.Web3.to_text(raw[64:]).rstrip('\x00')
             #name = bytearray.fromhex(result[2:]).decode(errors='ignore').rstrip('\x00')
             return name
         except Exception:
@@ -224,8 +184,8 @@ def get_creation_to_first_trade_delay(token: str, chain: str) -> dict:
     if txs:
         for item in txs:
             if item['timeStamp']:
-                    trade_timestamp = datetime.fromtimestamp(int(item['timeStamp']))
-                    creation_timestamp_dt = datetime.fromtimestamp(int(creation_timestamp))
+                    trade_timestamp = config.datetime.fromtimestamp(int(item['timeStamp']))
+                    creation_timestamp_dt = config.datetime.fromtimestamp(int(creation_timestamp))
                     debug_print(f"The creation timestamp is: {creation_timestamp_dt}\n")
                     debug_print(f"The timestamp of the first trade is: {trade_timestamp}\n")
                     age_seconds = (trade_timestamp - creation_timestamp_dt).total_seconds()
@@ -312,7 +272,7 @@ def get_receipt_logs(hash: str, chain: str):
 def parse_transfer_logs(logs):
     transfers = []
     for log in logs:
-        if log["topics"][0].lower() == TRANSFER_TOPIC:
+        if log["topics"][0].lower() == config.TRANSFER_TOPIC:
             try:
                 from_addr = "0x" + log["topics"][1][-40:]
                 to_addr = "0x" + log["topics"][2][-40:]
@@ -353,11 +313,11 @@ def get_token_age(token_address,chain):
     tx_hash = get_contract_creation_tx(token_address,chain)['hash']
     if(tx_hash == None):
         debug_print("error while getting tx hash")
-        return
+        return None
     blocknum = get_transaction_from_hash(tx_hash,chain)
     result = get_timestamp_from_blocknum(blocknum,chain)
-    creation_timestamp = datetime.fromtimestamp(int(result,16))
-    current_timestamp = datetime.now()
+    creation_timestamp = config.datetime.fromtimestamp(int(result,16))
+    current_timestamp = config.datetime.now()
 
     #Compute token age
     age_seconds = (current_timestamp - creation_timestamp).total_seconds()
@@ -385,8 +345,8 @@ def last_active_age(token_address,chain):
 
     if res['status'] == '1' and res['result']:
         timestamp = int(res['result'][0]['timeStamp'])
-        last_time = datetime.fromtimestamp(timestamp)
-        now = datetime.now()
+        last_time = config.datetime.fromtimestamp(timestamp)
+        now = config.datetime.now()
         age_days = (now - last_time).total_seconds() / 86400
         
         debug_print(f"Last transaction Hash: {res['result'][0]['hash']}")
@@ -413,13 +373,13 @@ def get_token_balance_API(token,account,chain):
     res = api_call(params,chain)
     return int(res['result']) if res['result'] else None
 
-def get_token_balance_web3(address: str, token: str, web3: Web3, abi: list) -> int:
+def get_token_balance_web3(address: str, token: str, web3: config.Web3, abi: list) -> int:
     """
     Retrieves the balance of `address` for an ERC-20 `token` using `web3.py`.
     """
     try:
-        contract = web3.eth.contract(address=Web3.to_checksum_address(token), abi=abi)
-        balance = contract.functions.balanceOf(Web3.to_checksum_address(address)).call()
+        contract = web3.eth.contract(address=config.Web3.to_checksum_address(token), abi=abi)
+        balance = contract.functions.balanceOf(config.Web3.to_checksum_address(address)).call()
         return balance
     except Exception as e:
         print(f"⚠️ Error fetching balance for {address}: {e}")
@@ -474,12 +434,14 @@ def get_tx_list(address: str, startblock: int, endblock, chain: str) -> list:
         return []
 
 
-def get_holder_age(address,chain):
-    try:
-        debug_print(f"Fetching normal transactions for {address}")
+import concurrent.futures
+
+def get_holder_age(address, chain):
+    def fetch_earliest_tx(action, extra_params=None):
+        debug_print(f"Fetching {action} transactions for {address}")
         params = {
             "module": "account",
-            "action": "txlist",
+            "action": action,
             "address": address,
             "startblock": 0,
             "endblock": 99999999,
@@ -487,66 +449,53 @@ def get_holder_age(address,chain):
             "offset": 1,
             "sort": "asc",
         }
-        res_tx = api_call(params,chain)
+        if extra_params:
+            params.update(extra_params)
 
-        earliest_tx_time = None
-        if res_tx.get("status") == "1" and res_tx.get("result"):
-            first_tx = res_tx["result"][0]
-            earliest_tx_time = int(first_tx["timeStamp"])
-            debug_print(f"Earliest normal tx timestamp: {datetime.fromtimestamp(earliest_tx_time)}")
-        else:
-            debug_print("No normal transactions found")
-    
-    except Exception as e:
-        debug_print(f"Error fetching transactions for {address}: {e}")
-        return None
-    #------------------------------------------------
-    try:
-        debug_print(f"Fetching token transactions for {address}")
-        params_token = {
-            "module": "account",
-            "action": "tokentx",
-            "address": address,
-            "startblock": 0,
-            "endblock": 99999999,
-            "page": 1,
-            "offset": 1,
-            "sort": "asc",
-            "apikey": BSCSCAN_API_KEY
-        }
-        res_token = requests.get(BASE_URL_BSC, params=params_token, timeout=10).json()
-
-        earliest_token_tx_time = None
-        if res_token.get("status") == "1" and res_token.get("result"):
-            first_token_tx = res_token["result"][0]
-            earliest_token_tx_time = int(first_token_tx["timeStamp"])
-            debug_print(f"Earliest token tx timestamp: {datetime.fromtimestamp(earliest_token_tx_time)}")
-        else:
-            debug_print("No token transactions found")
-
-        if earliest_tx_time and earliest_token_tx_time:
-            earliest_time = min(earliest_tx_time, earliest_token_tx_time)
-            debug_print(f"Using earliest timestamp from normal or token tx: {datetime.fromtimestamp(earliest_time)}")
-        else:
-            earliest_time = earliest_tx_time or earliest_token_tx_time
-            if earliest_time:
-                debug_print(f"Using earliest timestamp from one source: {datetime.fromtimestamp(earliest_time)}")
+        try:
+            if action == "tokentx":
+                res = config.requests.get(config.BASE_URL_BSC, params=params, timeout=10).json()
             else:
-                debug_print("No transactions found at all")
+                res = api_call(params, chain)
+
+            if res.get("status") == "1" and res.get("result"):
+                first_tx = res["result"][0]
+                earliest_time = int(first_tx["timeStamp"])
+                debug_print(f"Earliest {action} tx timestamp: {config.datetime.fromtimestamp(earliest_time)}")
+                return earliest_time
+            else:
+                debug_print(f"No {action} transactions found")
                 return None
+        except Exception as e:
+            debug_print(f"Error fetching {action} transactions for {address}: {e}")
+            return None
 
-        return datetime.fromtimestamp(earliest_time).isoformat()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        future_normal = executor.submit(fetch_earliest_tx, "txlist")
+        future_token = executor.submit(fetch_earliest_tx, "tokentx", {"apikey": config.BSCSCAN_API_KEY})
 
-    except Exception as e:
-        debug_print(f"Error fetching transactions for {address}: {e}")
-        return None
+        earliest_tx_time = future_normal.result()
+        earliest_token_tx_time = future_token.result()
 
-def get_unique_token_holders_web3(token_address: str, web3: Web3, abi: list,
+    if earliest_tx_time and earliest_token_tx_time:
+        earliest_time = min(earliest_tx_time, earliest_token_tx_time)
+        debug_print(f"Using earliest timestamp from normal or token tx: {config.datetime.fromtimestamp(earliest_time)}")
+    else:
+        earliest_time = earliest_tx_time or earliest_token_tx_time
+        if earliest_time:
+            debug_print(f"Using earliest timestamp from one source: {config.datetime.fromtimestamp(earliest_time)}")
+        else:
+            debug_print("No transactions found at all")
+            return None
+
+    return config.datetime.fromtimestamp(earliest_time).isoformat()
+
+def get_unique_token_holders_web3(token_address: str, web3: config.Web3, abi: list,
                           from_block: int, to_block: int = 'latest',
                           step: int = 5000, max_workers: int = 10) -> dict:
 
-    token_address = Web3.to_checksum_address(token_address)
-
+    token_address = config.Web3.to_checksum_address(token_address)
+    
     if isinstance(to_block, str) and to_block.lower() == 'latest':
         to_block = web3.eth.block_number
 
@@ -556,14 +505,14 @@ def get_unique_token_holders_web3(token_address: str, web3: Web3, abi: list,
     all_addresses = set()
 
     print(f"📦 Scanning Transfer logs from block {from_block} to {to_block}...")
-    for start in tqdm(range(from_block, to_block + 1, step)):
+    for start in config.tqdm(range(from_block, to_block + 1, step)):
         end = min(start + step - 1, to_block)
         try:
             logs = web3.eth.get_logs({
                 "fromBlock": start,
                 "toBlock": end,
                 "address": token_address,
-                "topics": [TRANSFER_TOPIC]
+                "topics": [config.TRANSFER_TOPIC]
             })
 
             for log in logs:
@@ -582,14 +531,14 @@ def get_unique_token_holders_web3(token_address: str, web3: Web3, abi: list,
 
     def check_balance(addr):
         try:
-            balance = balance_of(Web3.to_checksum_address(addr)).call()
+            balance = balance_of(config.Web3.to_checksum_address(addr)).call()
             return (addr, balance) if balance > 0 else None
         except:
             return None
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with config.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(check_balance, addr): addr for addr in all_addresses}
-        for future in tqdm(as_completed(futures), total=len(futures)):
+        for future in config.tqdm(config.as_completed(futures), total=len(futures)):
             result = future.result()
             if result:
                 addr, balance = result
@@ -618,22 +567,53 @@ def get_unique_token_holders_API(token,chain):
     debug_print(f"Number of holders: {len(addresses)}\n")
     return addresses
 
-def get_unique_token_holders_moralis(token, chain):
+import time
+
+def get_unique_token_holders_moralis(token, chain, max_pages=5, delay_seconds=1):
     params = {
         "chain": chain,
         "order": "DESC",
         "token_address": token
     }
-    response = evm_api.token.get_token_owners(api_key=MORALIS_API_KEY, params=params)
-    res = response["result"]
-    # Convert balance strings/floats to integers (rounded down)
-    owner_balances = [(entry['owner_address'], int(float(entry['balance']))) for entry in res]
-    return dict(owner_balances)
+    all_owners = []
+    cursor = None
+    pages_fetched = 0
+
+    while True:
+        if cursor:
+            params["cursor"] = cursor
+        else:
+            params.pop("cursor", None)
+
+        try:
+            response = config.evm_api.token.get_token_owners(api_key=config.MORALIS_API_KEY, params=params)
+        except Exception as e:
+            print(f"API request failed: {e}")
+            break
+
+        res = response.get("result", [])
+        all_owners.extend(res)
+
+        cursor = response.get("cursor")
+        pages_fetched += 1
+        if not cursor:
+            break
+
+        if max_pages and pages_fetched >= max_pages:
+            print(f"Max pages limit reached: {max_pages}")
+            break
+
+        time.sleep(delay_seconds)  # simple rate limiter
+
+    owner_balances = [(entry['owner_address'], int(float(entry['balance']))) for entry in all_owners]
+
+    return dict(owner_balances) if owner_balances else None
+
 
 def is_hardcoded_owner(token,chain):
     privileged_keywords = ["owner", "admin", "dev", "fee", "wallet"]
     pattern = r'address\s+(?:public|private|internal)?\s*([a-zA-Z0-9_]+)\s*=\s*(0x[a-fA-F0-9]{40})'
-    matches = re.findall(pattern, get_contract_info(token,chain)['source_code'])
+    matches = config.re.findall(pattern, get_contract_info(token,chain)['source_code'])
     flag = False
     for var_name, eth_address in matches:
         if any(keyword in var_name.lower() for keyword in privileged_keywords):
@@ -649,7 +629,7 @@ def is_hardcoded_owner(token,chain):
 def get_owner(token,chain):
     functionnames = ["owner","getowner","getOwner","admin"]
     for function in functionnames:
-        func = '0x' + keccak(text=function + '()').hex()[:8]
+        func = '0x' + config.keccak(text=function + '()').hex()[:8]
         #try to get contract's current owner 
         
         params = {
@@ -689,7 +669,15 @@ def get_total_supply(token,chain):
     res = api_call(params,chain)
     return int(res['result']) if res['result'] else None
 
-def holder_analysis(token,chain,holders,total_c_supply,web3: Web3, abi):
+def owner_circulating_supply_analysis(token,chain,owner,total_c_supply,web3: config.Web3,abi):
+    debug_print(f"Owner/creator address: {owner}")
+    owner_balance = get_token_balance_web3(owner, token, web3,abi)
+    owner_percentage = (owner_balance / total_c_supply) * 100
+    owner_flag = owner_percentage > 5
+
+    return owner_percentage,owner_flag
+
+def holder_circulating_supply_analysis(token,chain,holders,total_c_supply,web3: config.Web3, abi,owner,creator):
     """
     returns
     Owner/creator wallet contains < 5% of circulating token supply
@@ -698,16 +686,6 @@ def holder_analysis(token,chain,holders,total_c_supply,web3: Web3, abi):
     """
     #total_c_supply = get_circulating_supply(get_coingecko_id_from_contract(token, chain))
     #total_c_supply = get_circulating_supply_estimate(token,chain,holders)
-    owner = get_owner(token, chain)
-    if owner is None:
-        debug_print("Couldn't find owner, using creator\n")
-        owner = get_creator(token, chain)
-
-    debug_print(f"Owner/creator address: {owner}")
-    owner_balance = get_token_balance_web3(owner, token, web3,abi)
-    owner_percentage = (owner_balance / total_c_supply) * 100
-    owner_flag = owner_percentage > 5
-
     #if owner != creator:
     #    debug_print("owner is not the original creator\nowner: {owner}\ncreator:{creator}")
     #return
@@ -716,12 +694,9 @@ def holder_analysis(token,chain,holders,total_c_supply,web3: Web3, abi):
     debug_print(f"Analyzing {len(holders)} unique holders...")
     flagged_holders = []
     for holder, balance in holders.items():
-        if holder.lower() == owner.lower():
-            continue  # Skip the owner
-
+        if holder == owner or holder == creator: continue
         age = get_holder_age(holder,chain)
-        percentage = (balance / total_c_supply) * 100
-
+        percentage = balance / total_c_supply * 100
         # Add individual holder details only if they exceed threshold
         if percentage > 5:
             flagged_holders.append({
@@ -732,12 +707,6 @@ def holder_analysis(token,chain,holders,total_c_supply,web3: Web3, abi):
             })
 
     result = {
-        'owner': {
-            'address': owner,
-            'balance': owner_balance,
-            'percentage_of_supply': owner_percentage,
-            'exceeds_5_percent': owner_flag
-        },
         'flagged_holders': flagged_holders,
         'summary': {
             'total_holders_checked': len(holders),
@@ -748,7 +717,7 @@ def holder_analysis(token,chain,holders,total_c_supply,web3: Web3, abi):
 
     return result
 
-def top10_analysis(token: str, chain: str, holders: dict, total_circulating):
+def top10_analysis(token: str, chain: str, holders: dict, total_supply,total_circulating):
     """
     Returns a dictionary with:
     - top_10 holders (address, balance, percentage of supply)
@@ -757,7 +726,7 @@ def top10_analysis(token: str, chain: str, holders: dict, total_circulating):
     """
     #total_circulating = get_circulating_supply(get_coingecko_id_from_contract(token, chain))
     #total_circulating = get_circulating_supply_estimate(token,chain,holders)
-    total_supply = get_total_supply(token,chain)
+    #total_supply = get_total_supply(token,chain)
 
     # Sort holders by balance
     sorted_holders = sorted(holders.items(), key=lambda x: x[1], reverse=True)
@@ -871,25 +840,25 @@ def is_contract(address,chain):
     return code and code != '0x'
 
 
-def get_lp_pair(token: str, chain: str) -> str:
+def get_lp_pair(token: str, chain: str,web3) -> str:
     """
     Returns the LP pair address for a token-base_token pair on the given chain.
     """
     chain = chain.lower()
     if chain == "bsc":
-        RPC_URL = RPC_BSC
-        factory_addr = Web3.to_checksum_address("0xca143ce32fe78f1f7019d7d551a6402fc5350c73")  # PancakeSwap V2
-        base_pair_token = Web3.to_checksum_address("0xBB4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c")  # WBNB
+        # RPC_URL = config.RPC_BSC
+        factory_addr = config.Web3.to_checksum_address("0xca143ce32fe78f1f7019d7d551a6402fc5350c73")  # PancakeSwap V2
+        base_pair_token = config.Web3.to_checksum_address("0xBB4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c")  # WBNB
     elif chain == "ethereum":
-        RPC_URL = RPC_ETH  # Replace with actual Infura/Alchemy URL
-        factory_addr = Web3.to_checksum_address("0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f")  # Uniswap V2
-        base_pair_token = Web3.to_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")  # WETH
+        # RPC_URL = config.RPC_ETH  # Replace with actual Infura/Alchemy URL
+        factory_addr = config.Web3.to_checksum_address("0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f")  # Uniswap V2
+        base_pair_token = config.Web3.to_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")  # WETH
     else:
         raise ValueError("Unsupported chain. Use 'bsc' or 'ethereum'.")
     
-    web3 = Web3(Web3.HTTPProvider(RPC_URL))
-    if not web3.is_connected():
-        raise ConnectionError(f"❌ Failed to connect to {chain} RPC.")
+    # web3 = config.Web3(config.Web3.HTTPProvider(RPC_URL))
+    # if not web3.is_connected():
+    #     raise ConnectionError(f"❌ Failed to connect to {chain} RPC.")
 
     factory_abi = [
         {
@@ -913,10 +882,10 @@ def get_lp_pair(token: str, chain: str) -> str:
 
     factory = web3.eth.contract(address=factory_addr, abi=factory_abi)
 
-    token_address = Web3.to_checksum_address(token)
-    base_token_address = Web3.to_checksum_address(base_pair_token)
+    token_address = config.Web3.to_checksum_address(token)
+    base_token_address = config.Web3.to_checksum_address(base_pair_token)
     pair_address = factory.functions.getPair(token_address, base_token_address).call()
-    return pair_address,web3,pair_abi
+    return pair_address,pair_abi
 
     """
     def get_lp_holders(lp_address: str, web3: Web3, pair_abi: list,
@@ -976,7 +945,7 @@ def get_lp_pair(token: str, chain: str) -> str:
         return seen_addresses
     """
 
-def get_lp_holders(lp_address: str, web3: Web3, pair_abi: list,
+def get_lp_holders(lp_address: str, web3: config.Web3, pair_abi: list,
                    from_block: int, to_block: int = 'latest',
                    step: int = 5000, max_holders: int = 10,
                    min_step: int = 50) -> dict:
@@ -985,8 +954,8 @@ def get_lp_holders(lp_address: str, web3: Web3, pair_abi: list,
     Only adds an address to the result if it has a positive balance.
     Stops early once `max_holders` are found.
     """
-    TRANSFER_TOPIC = "0x" + Web3.keccak(text="Transfer(address,address,uint256)").hex()
-    lp_address = Web3.to_checksum_address(lp_address)
+    TRANSFER_TOPIC = "0x" + config.Web3.keccak(text="Transfer(address,address,uint256)").hex()
+    lp_address = config.Web3.to_checksum_address(lp_address)
 
     if isinstance(to_block, str) and to_block.lower() == 'latest':
         to_block = web3.eth.block_number
@@ -1011,8 +980,8 @@ def get_lp_holders(lp_address: str, web3: Web3, pair_abi: list,
             for log in logs:
                 if len(log["topics"]) >= 3:
                     try:
-                        from_addr = Web3.to_checksum_address("0x" + log["topics"][1].hex()[-40:])
-                        to_addr = Web3.to_checksum_address("0x" + log["topics"][2].hex()[-40:])
+                        from_addr = config.Web3.to_checksum_address("0x" + log["topics"][1].hex()[-40:])
+                        to_addr = config.Web3.to_checksum_address("0x" + log["topics"][2].hex()[-40:])
 
                         for addr in (from_addr, to_addr):
                             if addr not in seen_addresses:
@@ -1045,7 +1014,7 @@ def get_lp_holders(lp_address: str, web3: Web3, pair_abi: list,
     return holders
 
 
-def analyze_lp_security(token: str, chain: str = 'bsc') -> Dict:
+def analyze_lp_security(token: str, chain: str = 'bsc') -> config.Dict:
     # Supported chains
     chain_ids = {
         'eth': 1,
@@ -1063,11 +1032,10 @@ def analyze_lp_security(token: str, chain: str = 'bsc') -> Dict:
     print(f"🔍 Fetching token security data for token: {token} on chain: {chain}")
     
     # Fetch GoPlus data
-    response = Token(access_token=None).token_security(chain_id=chain_id, addresses=[token])
+    response = config.Token(access_token=None).token_security(chain_id=chain_id, addresses=[token])
     data = response.to_dict()  
 
     result = data.get("result", {})
-    print(data)
     token_data = next(iter(result.values()), None)
     if not token_data:
         print("❌ Token data not found.")
@@ -1083,13 +1051,13 @@ def analyze_lp_security(token: str, chain: str = 'bsc') -> Dict:
     percent_locked = (locked_amount / lp_total_supply) * 100 if lp_total_supply else 0
 
     # Check if ≥95% locked for ≥15 days
-    now = datetime.now()
+    now = config.datetime.now()
     long_term_locked = 0.0
     for holder in lp_holders:
         if holder.get("locked_detail"):
             for lock in holder["locked_detail"]:
                 try:
-                    end_time = datetime.fromisoformat(lock["end_time"].replace("Z", "+00:00"))
+                    end_time = config.datetime.fromisoformat(lock["end_time"].replace("Z", "+00:00"))
                     if (end_time - now).days >= 15:
                         long_term_locked += float(lock["amount"])
                 except Exception as e:
@@ -1136,7 +1104,7 @@ def analyze_lp_security(token: str, chain: str = 'bsc') -> Dict:
     return liquidity_status
 
 
-def compute_locked_lp_percentage(lockers: dict, lp_address: str, web3: Web3, pair_abi: list) -> float:
+def compute_locked_lp_percentage(lockers: dict, lp_address: str, web3: config.Web3, pair_abi: list) -> float:
     """
     Computes the % of LP tokens held by known lock services.
     
@@ -1208,7 +1176,7 @@ def find_all_lockers_and_burners(token, chain, holders: dict,web3):
         "burners": burners
     }
 
-def compute_95pct_locked_or_burned(token_address: str,web3: Web3,pair_abi: list,chain: str,from_block: int,to_block: int = "latest") -> float:
+def compute_95pct_locked_or_burned(token_address: str,web3: config.Web3,pair_abi: list,chain: str,from_block: int,to_block: int = "latest") -> float:
     """
     Computes % of LP tokens locked or burned for >=15 days for the largest pool.
     Returns a float (e.g. 0.95 for 95%)
@@ -1266,15 +1234,15 @@ def is_locked_for_15_days_or_more(unlock_timestamp: int) -> bool:
     """
     if unlock_timestamp == 0:
         return True
-    unlock_time = datetime.utc_from_timestamp(unlock_timestamp)
-    return unlock_time > datetime.now() + datetime.timedelta(days=15)
+    unlock_time = config.datetime.utc_from_timestamp(unlock_timestamp)
+    return unlock_time > config.datetime.now() + config.datetime.timedelta(days=15)
 
-def get_unlock_timestamp(locker_address: str, lp_token_address: str, chain: str, web3: Web3) -> int:
+def get_unlock_timestamp(locker_address: str, lp_token_address: str, chain: str, web3: config.Web3) -> int:
     """
     Dynamically infers the unlock timestamp of LP tokens locked in a contract.
     It does this by analyzing the contract's ABI and probing known unlock method names.
     """
-    locker_address = Web3.to_checksum_address(locker_address)
+    locker_address = config.Web3.to_checksum_address(locker_address)
 
     # Step 1: Confirm it's a contract
     code = web3.eth.get_code(locker_address)
@@ -1300,7 +1268,7 @@ def get_unlock_timestamp(locker_address: str, lp_token_address: str, chain: str,
             except:
                 unlock_time = fn().call()
             # Must be a plausible future timestamp
-            if unlock_time > int(time.time()):
+            if unlock_time > int(config.time.time()):
                 print(f"✅ Unlock time for {locker_address} from `{method}`: {unlock_time}")
                 return unlock_time
         except Exception:
@@ -1318,7 +1286,7 @@ def find_lockers_by_methods(token: str, chain: str, addresses: set[str]) -> set[
 
     # Load known selectors as dict: selector -> method name
     with open("/home/amedeo/Desktop/code_tests/data/4bytes-master/locking_selectors_inverted.json", "r") as f:
-        selector_to_method = json.load(f)  # dict: e.g. { "0xa9059cbb": "transfer(address,uint256)" }
+        selector_to_method = config.json.load(f)  # dict: e.g. { "0xa9059cbb": "transfer(address,uint256)" }
 
     # Get contract creation info
     creation = get_contract_creation_tx(token, chain)
@@ -1436,7 +1404,7 @@ def owner_hasless_5_LP(token,chain):
 
     pair = web3.eth.contract(address=pair_address, abi=pair_abi)
     total_lp = pair.functions.totalSupply().call()
-    creator = Web3.to_checksum_address(get_creator(token, chain))
+    creator = config.Web3.to_checksum_address(get_creator(token, chain))
     creator_lp = pair.functions.balanceOf(creator).call()
 
     pct = to_percent(creator_lp, total_lp)
@@ -1451,19 +1419,38 @@ def owner_hasless_5_LP(token,chain):
 """----------------------------------------"""
 
 def extract_all_functions(source_code: str):
-    pattern = re.compile(r'(function\s+[^\{]+\{(?:[^{}]*|\{[^{}]*\})*\})', re.DOTALL)
-    return [match.strip() for match in pattern.findall(source_code)]
+    functions = []
+    inside_function = False
+    brace_count = 0
+    current_function = []
 
-def analyze_token_contract_with_snippets(source_code: str) -> dict:
+    lines = source_code.splitlines()
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("function"):
+            inside_function = True
+            brace_count = 0
+            current_function = [line]
+            brace_count += line.count("{") - line.count("}")
+            continue
+        elif inside_function:
+            current_function.append(line)
+            brace_count += line.count("{") - line.count("}")
+            if brace_count <= 0:
+                inside_function = False
+                functions.append("\n".join(current_function))
+
+    return functions
+
+
+def analyze_token_contract_with_snippets(source_code: str, pbar=None) -> dict:
     findings = {}
     normalized_code = source_code.lower()
     funcs = extract_all_functions(normalized_code)
-
-    # Keyword categories
     keyword_categories = {
         'mint_function_detected': [
             'mint', 'minttoken', 'minted', 'mining', 'claim', 'reward', 'gift', 'bonus', 'earn', 'airdrop', 'unlock',
-            'tokenclaim', 'tokendrop', 'mintnft', 'airdropnft', 'claimnft', 'promoClaim', 'promotionbonus',
+            'tokenclaim', 'tokendrop', 'mintnft', 'airdropnft', 'claimnft', 'promoclaim', 'promotionbonus',
             'joingiveaway', 'claimgiveaway', 'claimoffer', 'getspecialoffer'
         ],
         'ownership_renounced': [
@@ -1495,16 +1482,19 @@ def analyze_token_contract_with_snippets(source_code: str) -> dict:
         ]
     }
 
-    # Scan each function and categorize
+    progress_step = 1 / len(keyword_categories) if pbar else None
+
     for category, keywords in keyword_categories.items():
-        matching_funcs = []
-        for func in funcs:
-            if any(keyword in func for keyword in keywords):
-                matching_funcs.append(func)
+        matching_funcs = [func for func in funcs if any(keyword in func for keyword in keywords)]
         findings[category] = {
             'found': bool(matching_funcs),
-            'snippets': matching_funcs
+            'snippets': matching_funcs,
+            'snippets_number': len(matching_funcs)
         }
+        if pbar:
+            pbar.update(progress_step)
+    return findings
+
 
     # 🖨️ Formatted output
     """print("\n====== 🔍 Token Smart Contract Analysis Report ======\n")
@@ -1532,7 +1522,7 @@ def get_coingecko_id_from_contract(contract_address, chain):
         raise ValueError(f"Unsupported chain: {chain}")
 
     url = f"https://api.coingecko.com/api/v3/coins/{chain_map[chain]}/contract/{contract_address}"
-    res = requests.get(url)
+    res = config.requests.get(url)
     if res.status_code != 200:
         print(f"CoinGecko ID lookup failed: {res.status_code}")
         return None
@@ -1540,7 +1530,7 @@ def get_coingecko_id_from_contract(contract_address, chain):
 
 def get_circulating_supply(coingecko_id):
     url = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}"
-    res = requests.get(url)
+    res = config.requests.get(url)
     if res.status_code != 200:
         return None
     try:
@@ -1556,20 +1546,20 @@ def get_circulating_supply_estimate(token,chain,addresses = ''):
     total_supply = get_total_supply(token,chain)
     c_supply = 0
     locked_or_burned_supply = 0
-    for holder,balance in tqdm(holders.items(), desc="Calculating Circulating Supply", unit="address"):
-        print(holder)
+    for holder,balance in config.tqdm(holders.items(), desc="Calculating Circulating Supply", unit="address"):
+        #print(holder)
         if islocker(holder,chain) or isburner(holder,chain):
             locked_or_burned_supply += balance
         else:
             c_supply += balance
     
-    print(total_supply)
-    print(locked_or_burned_supply)
+    #print(total_supply)
+    #print(locked_or_burned_supply)
     return total_supply - locked_or_burned_supply
 
 def get_dexscreener_price_liquidity_volume(token_address):
     url = f"https://api.dexscreener.com/latest/dex/tokens/{token_address}"
-    res = requests.get(url).json()
+    res = config.requests.get(url).json()
     pairs = res.get('pairs', [])
 
     if not pairs:
@@ -1585,27 +1575,30 @@ def get_dexscreener_price_liquidity_volume(token_address):
     except (TypeError, ValueError):
         return None
 
-def get_liquidity_to_marketcap_ratio(token_address, price_liquidity, chain, holders, verbose=False):
+def get_liquidity_to_marketcap_ratio(token_address, chain, holders, supply, price_liquidity, verbose=False):
     # Step 1: Get CoinGecko ID
-    coingecko_id = get_coingecko_id_from_contract(token_address, chain)
-    supply = None
+    # coingecko_id = get_coingecko_id_from_contract(token_address, chain)
+    # supply = None
 
-    # Step 2: Try CoinGecko for circulating supply
-    if coingecko_id:
-        #supply = get_circulating_supply(coingecko_id)
-        supply = get_circulating_supply_estimate(token_address,chain,holders)
-        if verbose:
-            print(f"CoinGecko ID: {coingecko_id}, Supply from CoinGecko: {supply}")
+    # # Step 2: Try CoinGecko for circulating supply
+    # if coingecko_id:
+    #     supply = get_circulating_supply(coingecko_id)
+    #     if verbose:
+    #         print(f"CoinGecko ID: {coingecko_id}, Supply from CoinGecko: {supply}")
+    # else:
+    #     supply = get_circulating_supply_estimate(token_address,chain,holders)
+    #     if verbose:
+    #         print(f"CoinGecko ID not found, supply from estimate: {supply}")
 
-    if not supply:
-        if verbose: print("Failed to get circulating supply from both sources.")
-        return None
+    # if not supply:
+    #     if verbose: print("Failed to get circulating supply from both sources.")
+    #     return None
 
     # Step 3: Get price and liquidity from DEXScreener
     #price_liquidity = get_dexscreener_price_liquidity_volume(token_address)
-    if not price_liquidity:
-        if verbose: print("Failed to get DEXScreener price or liquidity.")
-        return None
+    # if not price_liquidity:
+    #     if verbose: print("Failed to get DEXScreener price or liquidity.")
+    #     return None
 
     price, liquidity, volume_24h = price_liquidity
     market_cap = supply * price
@@ -1648,14 +1641,14 @@ def get_volume_to_liquidity_ratio(price_liquidity, verbose=False):
     }
 """----------------------------------------"""
 
-def security_checks(token,chain):
+def run_security_checks(token, chain):
     """
     address darklist = A list of addresses that deserve to be accompanied by a warning.
     URL darklist = A list of URLs known to be fake, malicious, phishing.
     bsc-blacklist.json = list of bsc addresses known to be scams.
     ethereum-blacklist.json = list of eth addresses known to be scams.
     """
-    info = get_contract_info(token,chain)
+    info = get_contract_info(token, chain)
     code = info['source_code']
     """
     "source_code": source_code,
@@ -1670,32 +1663,37 @@ def security_checks(token,chain):
     source_code = info.get("source_code")
 
     with open("/home/amedeo/Desktop/code_tests/data/addresses-darklist.json") as f:
-        address_blacklist = json.load(f)
+        address_blacklist = config.json.load(f)
 
     with open("/home/amedeo/Desktop/code_tests/data/urls-darklist.json") as f:
-        url_blacklist = json.load(f)
+        url_blacklist = config.json.load(f)
 
     if chain == 'bsc':
         with open("/home/amedeo/Desktop/code_tests/data/bsc-blacklist.json") as f:
-            scammers_blacklist = json.load(f)
+            scammers_blacklist = config.json.load(f)
     elif chain == 'eth':
         with open("/home/amedeo/Desktop/code_tests/data/ethereum-blacklist.json") as f:
-            scammers_blacklist = json.load(f)
+            scammers_blacklist = config.json.load(f)
     
     lowtoken = token.lower()
-    matching_warnings = {}
-    i = 0
+
+    # Initialize the lists
+    matching_warnings = []
+    matching_urls = {}
+    matching_addresses = {}
+
+    # Address Blacklist Check
     for address in address_blacklist:
         if address["address"].lower() == lowtoken:
-            matching_warnings[i].append({
+            matching_warnings.append({
                 "address": address['address'],
-                "comment": address['comment']})
+                "comment": address['comment']
+            })
             print(f"Address: {address['address']}")
             print(f"Comment: {address['comment']}")
-        i+=1
 
-    matching_urls = {}
-    urls = re.findall(r'https?://[^\s"\'<>]+', source_code)
+    # URL Blacklist Check
+    urls = config.re.findall(r'https?://[^\s"\'<>]+', source_code)
     for blacklisted in url_blacklist:
         for found_url in urls:
             if blacklisted["id"] == found_url:
@@ -1704,20 +1702,21 @@ def security_checks(token,chain):
                 print("   → Reason:", blacklisted["comment"])
             matching_urls[found_url] = blacklisted["comment"]
     
-    matching_addresses = {}
+    # Token Address Check for Scammers Blacklist
     if token in scammers_blacklist["tokens"]:
-        print("Token address matches a suspicious address in the database!: ",token)
-    found_addresses = re.findall(r'0x[a-fA-F0-9]{40}', source_code)
+        print("Token address matches a suspicious address in the database!: ", token)
+
+    found_addresses = config.re.findall(r'0x[a-fA-F0-9]{40}', source_code)
     for address in found_addresses:
         if address in scammers_blacklist["tokens"]:
-            print("Found a suspicious address in the source code match with the database: ",address)
-            matching_addresses["{token}"] = "{address}"
+            print("Found a suspicious address in the source code match with the database: ", address)
+            matching_addresses[token] = address  # Corrected line
 
-    return [
-        matching_warnings,
-        matching_urls,
-        matching_addresses
-    ]
+    return {
+        "warnings": matching_warnings,
+        "suspicious_urls": matching_urls,
+        "suspicious_addresses": matching_addresses
+    }
 
 # """
 # import tempfile
@@ -1829,21 +1828,21 @@ def is_token_sellable(token_address: str, chain: str, test_amount_wei=10**18) ->
     Returns:
         bool: True if token appears sellable (not a honeypot), False otherwise.
     """
-    token_address = Web3.to_checksum_address(token_address)
+    token_address = config.Web3.to_checksum_address(token_address)
     if chain == "bsc":
-        rpc_url = RPC_BSC
-        router_addr = Web3.to_checksum_address("0x10ED43C718714eb63d5aA57B78B54704E256024E")  # PancakeSwap
-        base_pair_token = Web3.to_checksum_address("0xBB4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c")  # WBNB
+        rpc_url = config.RPC_BSC
+        router_addr = config.Web3.to_checksum_address("0x10ED43C718714eb63d5aA57B78B54704E256024E")  # PancakeSwap
+        base_pair_token = config.Web3.to_checksum_address("0xBB4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c")  # WBNB
     elif chain == "eth":
-        rpc_url = RPC_ETH 
-        router_addr = Web3.to_checksum_address("0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D")  # Uniswap
-        base_pair_token = Web3.to_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")  # WETH
+        rpc_url = config.RPC_ETH 
+        router_addr = config.Web3.to_checksum_address("0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D")  # Uniswap
+        base_pair_token = config.Web3.to_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")  # WETH
     else:
         raise ValueError("Unsupported chain. Use 'bsc' or 'ethereum'.")
     
-    w3 = Web3(Web3.HTTPProvider(rpc_url))
+    w3 = config.Web3(config.Web3.HTTPProvider(rpc_url))
 
-    ROUTER_ABI = json.loads(
+    ROUTER_ABI = config.json.loads(
         """[
             {
                 "name": "getAmountsOut",
@@ -1869,11 +1868,6 @@ def is_token_sellable(token_address: str, chain: str, test_amount_wei=10**18) ->
     except Exception as e:
         print(f"[!] Sell simulation failed: {e}")
         return False
-
-
-"""----------------------------------------"""
-def create_report():
-    return
     
 """----------------------------------------"""
 
@@ -1899,9 +1893,9 @@ def analyze_token(token_address: str, chain: str, analysis_types: list = None) -
     
     try:
         if chain == 'bsc':
-            web3 = Web3(Web3.HTTPProvider(RPC_BSC))
+            web3 = config.Web3(config.Web3.HTTPProvider(config.RPC_BSC))
         elif chain == 'eth':
-            web3 = Web3(Web3.HTTPProvider(RPC_ETH))
+            web3 = config.Web3(config.Web3.HTTPProvider(config.RPC_ETH))
     except:
         if not web3.is_connected():
             raise ConnectionError(f"❌ Failed to connect to {chain} RPC.")
@@ -1914,9 +1908,10 @@ def analyze_token(token_address: str, chain: str, analysis_types: list = None) -
     }
 
     # Initialize report string
-    report = f"Token Analysis Report\n{'='*50}\n"
-    report += f"Token: {results['token_name']} ({token_address})\n"
-    report += f"Chain: {chain.upper()}\n\n"
+    report_lines = []
+    report_lines.append(f"Token Analysis Report\n{'='*50}\n")
+    report_lines.append(f"Token: {results['token_name']} ({token_address})\n")
+    report_lines.append(f"Chain: {chain.upper()}\n\n")
 
     if 'contract' in analysis_types:
         print("\n🔍 Running contract analysis...")
@@ -1944,24 +1939,24 @@ def analyze_token(token_address: str, chain: str, analysis_types: list = None) -
                 'is_hardcoded_owner': hardcoded
             }
             
-            report += "Contract Analysis\n-----------------\n"
-            report += f"Verified: {'OK!' if contract_info['verified'] else 'X'}\n"
-            report += f"Owner Address: {results['analyses']['contract']['owner']}\n"
-            report += f"Creator Address: {results['analyses']['contract']['creator']}\n"
-            report += f"Is Proxy: {'Yes' if contract_info['is_proxy'] else 'No'}\n"
-            report += f"Is sellable (no honeypot): {'Yes' if sellable else 'No'}\n"
-            report += f"Is owner hardcoded: {'Yes' if hardcoded else 'No'}\n"
+            report_lines.append("Contract Analysis\n-----------------\n")
+            report_lines.append(f"Verified: {'OK!' if contract_info['verified'] else 'X'}\n")
+            report_lines.append(f"Owner Address: {results['analyses']['contract']['owner']}\n")
+            report_lines.append(f"Creator Address: {results['analyses']['contract']['creator']}\n")
+            report_lines.append(f"Is Proxy: {'Yes' if contract_info['is_proxy'] else 'No'}\n")
+            report_lines.append(f"Is sellable (no honeypot): {'Yes' if sellable else 'No'}\n")
+            report_lines.append(f"Is owner hardcoded: {'Yes' if hardcoded else 'No'}\n")
 
             if contract_info['source_code']:
                 analysis = analyze_token_contract_with_snippets(contract_info['source_code'])
                 results['analyses']['contract']['code_analysis'] = analysis
                 
-                report += "\nCode Analysis Findings:\n"
+                report_lines.append("\nCode Analysis Findings:\n")
                 for category, data in analysis.items():
                     if data['found']:
-                        report += f"WARNING: {category.replace('_', ' ').title()}\n"
+                        report_lines.append(f"WARNING: {category.replace('_', ' ').title()}\n")
                         for snippet in data['snippets']:
-                            report += f"  Code Snippet:\n{snippet}\n\n"
+                            report_lines.append(f"  Code Snippet:\n{snippet}\n\n")
 
     if 'holder' in analysis_types:
         print("\n🔍 Running holder analysis...")
@@ -1979,8 +1974,8 @@ def analyze_token(token_address: str, chain: str, analysis_types: list = None) -
         #holders = get_unique_token_holders_API(token_address,chain)
         owner = results['analyses']['contract']['owner'] if 'contract' in results['analyses'] else get_owner(token_address, chain)
     
-        report += "\nHolder Analysis\n--------------\n"
-        report += f"Total Unique Holders: {len(holders)}\n"
+        report_lines.append("\nHolder Analysis\n--------------\n")
+        report_lines.append(f"Total Unique Holders: {len(holders)}\n")
         # Get owner's percentage if possible
         # coingecko_id = get_coingecko_id_from_contract(token_address, chain)
         # if coingecko_id:
@@ -2005,20 +2000,27 @@ def analyze_token(token_address: str, chain: str, analysis_types: list = None) -
             #'owner_percentage': f"{owner_percentage}\n" if owner_percentage else "0\n",  # Will be calculated if coingecko data is available
             'owner_is_hidden': False if owner else True,
         }
-        total_c_supply = get_circulating_supply_estimate(token_address,chain,holders)
-        results['analyses']['holders'].update(holder_analysis(token_address,chain,holders,total_c_supply,web3,abi))
+        
+        coingecko_id = get_coingecko_id_from_contract(token_address, chain)
+        if coingecko_id != None:
+            total_c_supply = get_circulating_supply(coingecko_id)
+        else:
+            total_c_supply = get_circulating_supply_estimate(token_address,chain,holders)
+
+        results.update({'total_circulating_supply': total_c_supply})
+        results['analyses']['holders'].update(holder_circulating_supply_analysis(token_address,chain,holders,total_c_supply,web3,abi))
         results['analyses']['holders'].update(top10_analysis(token_address,chain,holders,total_c_supply))
         # Owner section
         if 'owner' in results['analyses']['holders']:
-            report += f"Owner Address: {results['analyses']['holders']['owner'].get('address', 'Unknown')}\n"
-            report += f"Owner Balance: {results['analyses']['holders']['owner'].get('balance', 0):,} tokens\n"
-            report += f"Owner Share: {results['analyses']['holders']['owner'].get('percentage_of_supply', 0):.2f}% of circulating supply\n"
+            report_lines.append(f"Owner Address: {results['analyses']['holders']['owner'].get('address', 'Unknown')}\n")
+            report_lines.append(f"Owner Balance: {results['analyses']['holders']['owner'].get('balance', 0):,} tokens\n")
+            report_lines.append(f"Owner Share: {results['analyses']['holders']['owner'].get('percentage_of_supply', 0):.2f}% of circulating supply\n")
             if results['analyses']['holders']['owner'].get('exceeds_5_percent', False):
-                report += "⚠️ Owner holds MORE than 5% of circulating supply\n"
+                report_lines.append("⚠️ Owner holds MORE than 5% of circulating supply\n")
             else:
-                report += "✅ Owner holds LESS than 5% of circulating supply\n"
+                report_lines.append("✅ Owner holds LESS than 5% of circulating supply\n")
         else:
-            report += "⚠️ Owner information is not available (possibly hidden or unverified)\n"
+            report_lines.append("⚠️ Owner information is not available (possibly hidden or unverified)\n")
 
         # Holder over 5% section
         if 'summary' in results['analyses']['holders']:
@@ -2026,51 +2028,61 @@ def analyze_token(token_address: str, chain: str, analysis_types: list = None) -
             over_5 = results['analyses']['holders']['summary'].get('holders_exceeding_5_percent', 0)
             compliant = results['analyses']['holders']['summary'].get('compliant', False)
 
-            report += f"Holders Checked (excluding owner): {total_checked}\n"
-            report += f"Holders >5%: {over_5}\n"
-            report += "✅ All holders under 5% threshold\n" if compliant else "⚠️ Some holders exceed 5% of supply\n"
+            report_lines.append(f"Holders Checked (excluding owner): {total_checked}\n")
+            report_lines.append(f"Holders >5%: {over_5}\n")
+            report_lines.append("✅ All holders under 5% threshold\n" if compliant else "⚠️ Some holders exceed 5% of supply\n")
         else:
-            report += "⚠️ Holder analysis data is missing\n"
+            report_lines.append("⚠️ Holder analysis data is missing\n")
 
         # Top 10 holders section
         if 'top_10_holders' in results['analyses']['holders']:
-            report += "\nTop 10 Token Holders:\n"
+            report_lines.append("\nTop 10 Token Holders:\n")
             for i, h in enumerate(results['analyses']['holders']['top_10_holders'], start=1):
                 addr = h.get('address', 'Unknown')
                 bal = h.get('balance', 0)
                 pct = h.get('percentage_of_circulating_supply', 0)
-                report += f"  {i}. {addr} — {bal:,} tokens ({pct:.2f}% of circulating supply)\n"
+                report_lines.append(f"  {i}. {addr} — {bal:,} tokens ({pct:.2f}% of circulating supply)\n")
 
             totals = results['analyses']['holders'].get('totals', {})
             circ_pct = totals.get('percentage_of_circulating_supply', 0)
             total_pct = totals.get('percentage_of_total_supply', 0)
             less_than_70 = totals.get('top_10_less_than_70_percent_circulating', True)
 
-            report += f"\nTop 10 Total Balance: {totals.get('total_top_10_balance', 0):,} tokens\n"
-            report += f"Top 10 Share of Circulating Supply: {circ_pct:.2f}%\n"
-            report += f"Top 10 Share of Total Supply: {total_pct:.2f}%\n"
-            report += "✅ Top 10 holders control LESS than 70% of circulating supply\n" if less_than_70 else "⚠️ Top 10 holders control MORE than 70% of circulating supply\n"
+            report_lines.append(f"\nTop 10 Total Balance: {totals.get('total_top_10_balance', 0):,} tokens\n")
+            report_lines.append(f"Top 10 Share of Circulating Supply: {circ_pct:.2f}%\n")
+            report_lines.append(f"Top 10 Share of Total Supply: {total_pct:.2f}%\n")
+            report_lines.append("✅ Top 10 holders control LESS than 70% of circulating supply\n" if less_than_70 else "⚠️ Top 10 holders control MORE than 70% of circulating supply\n")
         else:
-            report += "⚠️ Top 10 holder analysis is not available\n"
-
-
+            report_lines.append("⚠️ Top 10 holder analysis is not available\n")
             
     if 'liquidity' in analysis_types:
         print("\n🔍 Running liquidity analysis...")
         data = get_dexscreener_price_liquidity_volume(token_address)
-        liquidity_pool_depth = data[1]
-        holders = results['analyses']['holders']['holder_list'] if results['analyses']['holders']['holder_list'] else get_unique_token_holders_moralis(token_address,chain)
-        liq_market_ratio = get_liquidity_to_marketcap_ratio(token_address,data,chain,holders)
+        if not data:
+            report_lines.append(f"⚠️ ERROR: no pair token data found!")
+            pass
+        price, liquidity_pool_depth, volume = data
+        
+        total_c_supply = results.get('total_circulating_supply','')
+        if total_c_supply == '':
+            coingecko_id = get_coingecko_id_from_contract(token_address, chain)
+            if coingecko_id != None:
+                total_c_supply = get_circulating_supply(coingecko_id)
+            else:
+                total_c_supply = get_circulating_supply_estimate(token_address,chain,holders)
+        holders = results['analyses'].get('holders', {}).get('holder_list', get_unique_token_holders_moralis(token_address,chain))
+        liq_market_ratio = get_liquidity_to_marketcap_ratio(token_address,chain,holders,total_c_supply,data)
         vol_liq_ratio = get_volume_to_liquidity_ratio(data)
+        
         lp_address, web3, pair_abi = get_lp_pair(token_address,chain)
-        creation = get_contract_creation_tx(GOOD_TOKEN_ADDRESS,'bsc')
+        creation = get_contract_creation_tx(token_address,'bsc')
         creation_timestamp = creation["timestamp"]
         creation_blocknum = int(creation["blocknum"])
         #liquidity_holders = get_lp_holders(lp_address, web3, pair_abi, from_block=creation_blocknum,to_block="latest")
         liquidity_status = analyze_lp_security(token_address,chain)
         liquidity_holders = liquidity_status["lp_holders"]
 
-        lp_contract = web3.eth.contract(address=Web3.to_checksum_address(lp_address), abi=pair_abi)
+        lp_contract = web3.eth.contract(address=config.Web3.to_checksum_address(lp_address), abi=pair_abi)
         total_lp_supply = lp_contract.functions.totalSupply().call()
         
         if results.get("analyses", {}).get("contract") is not None:
@@ -2089,56 +2101,64 @@ def analyze_token(token_address: str, chain: str, analysis_types: list = None) -
         }
         results.update(liquidity_status)
         
-        report += "\nLiquidity Analysis\n-----------------\n"
+        report_lines.append("\nLiquidity Analysis\n-----------------\n")
         if liq_market_ratio:
-            report += f"Market Cap: ${liq_market_ratio['market_cap_usd']:,.2f}\n"
-            report += f"Liquidity: ${liquidity_pool_depth:,.2f}\n"
-            report += f"Liquidity/MCap Ratio: {liq_market_ratio['liquidity_to_market_cap_ratio']:.4f}\n"
+            report_lines.append(f"Market Cap: ${liq_market_ratio['market_cap_usd']:,.2f}\n")
+            report_lines.append(f"Liquidity: ${liquidity_pool_depth:,.2f}\n")
+            report_lines.append(f"Liquidity/MCap Ratio: {liq_market_ratio['liquidity_to_market_cap_ratio']:.4f}\n")
         if vol_liq_ratio:
-            report += f"24h Volume/Liquidity Ratio: {vol_liq_ratio['volume_to_liquidity_ratio']:.4f}\n"
+            report_lines.append(f"24h Volume/Liquidity Ratio: {vol_liq_ratio['volume_to_liquidity_ratio']:.4f}\n")
         if liquidity_status:
-            report += f"Percentage of liquidity locked: {liquidity_status['locked_liquidity_percent']:.4f}\n"
-            report += f"Was 95% of liquidity locked for more than 15 days?: {liquidity_status['locked_95_for_15_days']}\n"
-            report += f"Secure\n" if {liquidity_status['locked_95_for_15_days']} else "Unverified or Unlocked\n"
-            report += f"Creator owns under 5% of LP tokens: {liquidity_status['creator_under_5_percent']} ({liquidity_status['creator_percent_of_lp']})\n"
-            report += f"Total supply of LP tokens: {liquidity_status['total_lp_supply']}\n"
-            report += f"LP holders count: {liquidity_status['lp_holders_count']}\n"
-            report += f"\r\n"
+            report_lines.append(f"Percentage of liquidity locked: {liquidity_status['locked_liquidity_percent']:.4f}\n")
+            report_lines.append(f"Was 95% of liquidity locked for more than 15 days?: {liquidity_status['locked_95_for_15_days']}\n")
+            report_lines.append(f"Secure\n" if {liquidity_status['locked_95_for_15_days']} else "Unverified or Unlocked\n")
+            report_lines.append(f"Creator owns under 5% of LP tokens: {liquidity_status['creator_under_5_percent']} ({liquidity_status['creator_percent_of_lp']})\n")
+            report_lines.append(f"Total supply of LP tokens: {liquidity_status['total_lp_supply']}\n")
+            report_lines.append(f"LP holders count: {liquidity_status['lp_holders_count']}\n")
+            report_lines.append(f"\r\n")
  
-            report += f"Liquidity holders for {token_address}, ({results["token_name"] if results["token_name"] else get_token_name(token_address,chain)})\n"
+            report_lines.append(f"Liquidity holders for {token_address}, ({results["token_name"] if results["token_name"] else get_token_name(token_address,chain)})\n")
             for holder in liquidity_holders:
                 if holder["address"] == owner:
-                    report += f"\r\nOwner {holder["address"]} holds {holder["balance"]} LP tokens\r\n"
+                    report_lines.append(f"\r\nOwner {holder["address"]} holds {holder["balance"]} LP tokens\r\n")
                     owner_lp_balance = holder["balance"]
                     #check if owner holds less than 5% of liquidity...
                     if (owner_lp_balance / total_lp_supply) * 100 > 5:
                         if owner == creator:
                             print(f"WARNING: Owner/Creator holds over 5% of the liquidity")
-                            report += f"WARNING: Owner/Creator holds over 5% of the liquidity"
+                            report_lines.append(f"WARNING: Owner/Creator holds over 5% of the liquidity")
                         print(f"WARNING: Owner holds over 5% of the liquidity")
-                        report += f"WARNING: Owner holds over 5% of the liquidity"
+                        report_lines.append(f"WARNING: Owner holds over 5% of the liquidity")
                 elif holder == creator:
-                    report += f"\r\nCreator {holder["address"]} holds {holder["balance"]} LP tokens\r\n"
+                    report_lines.append(f"\r\nCreator {holder["address"]} holds {holder["balance"]} LP tokens\r\n")
                     creator_lp_balance = holder["balance"]
                     #check if creator holds less than 5% of liquidity...
                     if (creator_lp_balance / total_lp_supply) * 100 > 5:
                         print(f"WARNING: Creator holds over 5% of the liquidity")
-                        report += f"WARNING: Creator holds over 5% of the liquidity"
-                else: report += f"\r\n{holder["address"]} holds {holder["balance"]} LP tokens\r\n"
+                        report_lines.append(f"WARNING: Creator holds over 5% of the liquidity")
+                else: report_lines.append(f"\r\n{holder["address"]} holds {holder["balance"]} LP tokens\r\n")
 
     if 'security' in analysis_types:
         print("\n🔍 Running security checks...")
-        security_result = security_checks(token_address, chain)
+        security_result = run_security_checks(token_address, chain)
         results['analyses']['security'] = security_result
         check_types = ['Warnings', 'Suspicious URLs', 'Suspicious Addresses']
 
-        report += "\nSecurity Analysis\n----------------\n"
+        report_lines.append("\nSecurity Analysis\n----------------\n")
         if any(security_result):
             for check_type, findings in zip(check_types, security_result):
                 if findings:
-                    report += f"WARNING: Found {len(findings)} {check_type}\n"
+                    report_lines.append(f"⚠️ WARNING: Found {len(findings)} {check_type}\n")
+                    if isinstance(findings, dict):
+                        for item, description in findings.items():
+                            report_lines.append(f"  - {item}: {description}\n")
+                    elif isinstance(findings, list):
+                        for item in findings:
+                            report_lines.append(f"  - {item}\n")
+                    else:
+                        report_lines.append(f"  - {findings}\n")
         else:
-            report += "✅ No security issues found\n"
+            report_lines.append("✅ No security issues found\n")
 
     if 'lifecycle' in analysis_types:
         print("\n🔍 Running lifecycle analysis analysis...")
@@ -2150,71 +2170,39 @@ def analyze_token(token_address: str, chain: str, analysis_types: list = None) -
             'token_creation_date': creation_trade_delay["creation_date"],
             'creation_to_first_trade_seconds': creation_trade_delay["time_delay_seconds"],
             'creation_to_first_trade_blocks' : creation_trade_delay["block_delay"],
-            'last_tx_hash': time_since_last_tx["last_tx_has"],
+            'last_tx_hash': time_since_last_tx["last_tx_hash"],
             'last_active_age': time_since_last_tx["last_active_utc"],
             'inactive_days': time_since_last_tx["inactive_days"]
         }
 
-        report += "\nLifecycle Analysis\n-------------\n"
-        report += f"Token Age: {token_age/86400:.2f} days\n"
+        report_lines.append("\nLifecycle Analysis\n-------------\n")
+        report_lines.append(f"Token Age: {token_age/86400:.2f} days\n")
         if creation_trade_delay:
-            report += f"Time to First Trade: {creation_trade_delay['time_delay_seconds']/3600:.2f} hours\n"
-            report += f"Blocks to First Trade: {creation_trade_delay['block_delay']}\n"
-            report += f"Token Creation Date: {creation_trade_delay['creation_date']}\n"
+            report_lines.append(f"Time to First Trade: {creation_trade_delay['time_delay_seconds']/3600:.2f} hours\n")
+            report_lines.append(f"Blocks to First Trade: {creation_trade_delay['block_delay']}\n")
+            report_lines.append(f"Token Creation Date: {creation_trade_delay['creation_date']}\n")
         if time_since_last_tx:
-            report += f"Last Active: {time_since_last_tx['last_active_utc']}\n"
-            report += f"Days Since Last Activity: {time_since_last_tx['inactive_days']} days\n"
-            report += f"Last Transaction Hash: {time_since_last_tx['last_tx_has']}\n"
+            report_lines.append(f"Last Active: {time_since_last_tx['last_active_utc']}\n")
+            report_lines.append(f"Days Since Last Activity: {time_since_last_tx['inactive_days']} days\n")
+            report_lines.append(f"Last Transaction Hash: {time_since_last_tx['last_tx_hash']}\n")
         else:
-            report += "⚠️ Could not determine last active transaction.\n"
+            report_lines.append("⚠️ Could not determine last active transaction.\n")
     
    
     # Save the report to a file
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    report = ''.join(report_lines)
+    timestamp = config.datetime.now().strftime('%Y%m%d_%H%M%S')
     report_filename = f"token_analysis_{token_address[:8]}_{filename_suffix}_{timestamp}.txt"
     json_filename = f"token_analysis_{token_address[:8]}_{filename_suffix}_{timestamp}.json"
     
     with open(report_filename, 'w',encoding='utf-8') as f:
         f.write(report)
     
-    print(results)
     with open(json_filename, 'w') as f:
-        json.dump(results, f, indent=4)
+        config.json.dump(results, f, indent=4)
 
     print(f"\n✅ Analysis complete!")
     print(f"📝 Report saved to: {report_filename}")
     print(f"📊 JSON data saved to: {json_filename}")
     
     return results
-
-"""----------------------------------------"""
-
-def main():
-    analyze_token("0x223D94A76eA0d3F65c28F869f89B3739E73c1eC6",'bsc',['liquidity'])
-    return
-    lp_address, web3, pair_abi = get_lp_pair(BAD_TOKEN_ADDRESS2,'bsc')
-    creation = get_contract_creation_tx(BAD_TOKEN_ADDRESS2,'bsc')
-    creation_timestamp = creation["timestamp"]
-    creation_blocknum = int(creation["blocknum"])
-    abi = get_contract_info(BAD_TOKEN_ADDRESS2,'bsc')['abi']
-
-    print(get_unique_token_holders_web3(BAD_TOKEN_ADDRESS2,web3,abi,creation_blocknum,'latest'))
-    return
-    analyze_token("0xfb5b838b6cfeedc2873ab27866079ac55363d37e",'bsc',['liquidity'])
-    return
-    lp_address, web3, pair_abi = get_lp_pair("0xfb5b838b6cfeedc2873ab27866079ac55363d37e",'bsc')
-    creation = get_contract_creation_tx("0xfb5b838b6cfeedc2873ab27866079ac55363d37e",'bsc')
-    creation_timestamp = creation["timestamp"]
-    creation_blocknum = int(creation["blocknum"])
-    holders = get_lp_holders(lp_address, web3, pair_abi, from_block=creation_blocknum,to_block=int(get_latest_tx(lp_address,'bsc')['blockNumber']))
-    l_and_b_list = find_all_lockers_and_burners("0xfb5b838b6cfeedc2873ab27866079ac55363d37e",'bsc',holders)
-
-    res = compute_locked_lp_percentage(l_and_b_list["lockers"],lp_address,web3,pair_abi)
-    print(f"Locked LP %: {res}\n")
-    for locker in l_and_b_list["lockers"]:
-        print(f"Liquidity in {locker} is locked for 15 days or more: {is_locked_for_15_days_or_more(get_unlock_timestamp(locker,lp_address,'bsc',web3))}\n")
-    #0xfb5b838b6cfeedc2873ab27866079ac55363d37e
-    return
-
-if __name__ == '__main__':
-    main()

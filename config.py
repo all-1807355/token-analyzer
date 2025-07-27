@@ -1,0 +1,45 @@
+import requests
+import time
+import json
+import os
+import re
+import math
+import csv
+import inspect
+import time
+from typing import Union, Dict
+from decimal import Decimal
+from web3 import Web3
+from datetime import datetime
+from moralis import evm_api
+from eth_utils import keccak
+from urllib.parse import urlencode
+from goplus.token import Token
+from typing import Dict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
+
+#pass smellytokens2025 or Smelly@tokens2025 (infura)
+ETHERSCAN_API_KEY = "YI5IUPU68CCB5AWVF8TP3T2BKY9FXW4QUH"
+BSCSCAN_API_KEY = "IZJXB2H1EYWQ41PSSXC5HE4FMPS58KKPCZ"
+MORALIS_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6IjhmNjk4NzNlLTUzZjktNGUxNi05Yzk2LTViODM0OGQ3Y2RmMSIsIm9yZ0lkIjoiNDQzMjE0IiwidXNlcklkIjoiNDU2MDA5IiwidHlwZUlkIjoiZDc3NTRlMTctYWNhZi00NWU1LWJlMjEtZDQ0MjM4ZGMxZDZhIiwidHlwZSI6IlBST0pFQ1QiLCJpYXQiOjE3NDUzMTI1ODEsImV4cCI6NDkwMTA3MjU4MX0.TjBrdK-dzF9t5nRmQImzIenGGYussYsaqzKr7E_oXsc"
+DE_FI_KEY = "01f0c32c50f8423fbecda88260014f1e"
+INFURA = "604e06a07adb4e4990bc4779bf8f4fa6" 
+GOLDRUSH = "cqt_rQggFbfcQcgR3vMG74KGdk4fpVxq"
+#url = "https:///v3/604e06a07adb4e4990bc4779bf8f4fa6"
+
+TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+#keccak256("Transfer(address,address,uint256)")
+
+GOOD_TOKEN_ADDRESS = "0x55d398326f99059fF775485246999027B3197955"
+BAD_TOKEN_ADDRESS = "0x15b874ADB2a0505579C46138Fb260a40A4BdFA94"
+BAD_TOKEN_ADDRESS2 = "0x1d12b80341e40f763503117a2a57eababd4040c2" #OPEN dao token
+
+BASE_URL_BSC = "https://api.bscscan.com/api"
+BASE_URL_ETH = "https://api.etherscan.io/api"
+
+#RPC_BSC = "https://bsc-dataseed.binance.org/"
+RPC_BSC = "https://rpc.ankr.com/bsc/593a18aac4d0ae56b4f6dfcc2785e56d01515b0bcd30d6d52c9645b65cd1df95"
+RPC_ETH = f"https://mainnet.infura.io/v3/{INFURA}"
+
+DEBUG = False
