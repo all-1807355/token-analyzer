@@ -44,23 +44,23 @@ def lifecycle_analysis(token_address: str, chain: str, results: dict, report_lin
         
         results['analyses']['lifecycle'] = {
             'token_age_seconds': token_age,
-            'token_creation_date': creation_trade_delay["creation_date"],
-            'creation_to_first_trade_seconds': creation_trade_delay["time_delay_seconds"],
-            'creation_to_first_trade_blocks' : creation_trade_delay["block_delay"],
-            'last_tx_hash': time_since_last_tx["last_tx_hash"],
-            'last_active_age': time_since_last_tx["last_active_utc"],
-            'inactive_days': time_since_last_tx["inactive_days"]
+            'token_creation_date': creation_trade_delay.get("creation_date"),
+            'creation_to_first_trade_seconds': creation_trade_delay.get("time_delay_seconds"),
+            'creation_to_first_trade_blocks' : creation_trade_delay.get("block_delay"),
+            'last_tx_hash': time_since_last_tx.get("last_tx_hash"),
+            'last_active_age': time_since_last_tx.get("last_active_utc"),
+            'inactive_days': time_since_last_tx.get("inactive_days")
         }
 
         report_lines.append(f"Token Age: {token_age/86400:.2f} days\n")
         if creation_trade_delay:
-            report_lines.append(f"Time to First Trade: {creation_trade_delay['time_delay_seconds']/3600:.2f} hours\n")
-            report_lines.append(f"Blocks to First Trade: {creation_trade_delay['block_delay']}\n")
-            report_lines.append(f"Token Creation Date: {creation_trade_delay['creation_date']}\n")
+            report_lines.append(f"Time to First Trade: {creation_trade_delay.get('time_delay_seconds')/3600:.2f} hours\n")
+            report_lines.append(f"Blocks to First Trade: {creation_trade_delay.get('block_delay')}\n")
+            report_lines.append(f"Token Creation Date: {creation_trade_delay.get('creation_date')}\n")
         if time_since_last_tx:
-            report_lines.append(f"Last Active: {time_since_last_tx['last_active_utc']}\n")
-            report_lines.append(f"Days Since Last Activity: {time_since_last_tx['inactive_days']} days\n")
-            report_lines.append(f"Last Transaction Hash: {time_since_last_tx['last_tx_hash']}\n")
+            report_lines.append(f"Last Active: {time_since_last_tx.get('last_active_utc')}\n")
+            report_lines.append(f"Days Since Last Activity: {time_since_last_tx.get('inactive_days')} days\n")
+            report_lines.append(f"Last Transaction Hash: {time_since_last_tx.get('last_tx_hash')}\n")
         else:
             report_lines.append("⚠️ Could not determine last active transaction.\n")
         if pbar:
@@ -91,7 +91,8 @@ def security_analysis(token_address: str, chain: str, results: dict, report_line
     }
     report_lines.append("\nSecurity Analysis\n-----------------\n")
     try:
-        security_report = utils.run_security_checks(token_address, chain)
+        source_code = results['analyses']['contract'].get('source_code')
+        security_report = utils.run_security_checks(token_address, chain,source_code) if source_code != None else None
         if not security_report:
             error_msg = "Security analysis data not available."
             results.setdefault('analyses', {}).setdefault('security', {})['error'] = error_msg
@@ -101,30 +102,31 @@ def security_analysis(token_address: str, chain: str, results: dict, report_line
             # return results, report_lines
         
         #results['analyses']['security'] = security_report
-        results['analyses']['security']["warnings"] = security_report['warnings']
-        results['analyses']['security']["howmany_warnings"] = len(security_report['warnings'])
-        
-        results['analyses']['security']['suspicious_urls'] = security_report['suspicious_urls']
-        results['analyses']['security']['howmany_suspicious_urls'] = len(security_report['suspicious_urls'])
-        
-        results['analyses']['security']['suspicious_addresses'] = security_report['suspicious_addresses']
-        results['analyses']['security']['howmany_suspicious_addresses'] = len(security_report['suspicious_addresses'])
+        if security_report:
+            results['analyses']['security']["warnings"] = security_report.get('warnings', []) 
+            results['analyses']['security']["howmany_warnings"] = len(security_report.get('warnings', []))
+            
+            results['analyses']['security']['suspicious_urls'] = security_report.get('suspicious_urls', {})
+            results['analyses']['security']['howmany_suspicious_urls'] = len(security_report.get('suspicious_urls', []))
+            
+            results['analyses']['security']['suspicious_addresses'] = security_report.get('suspicious_addresses', {}) 
+            results['analyses']['security']['howmany_suspicious_addresses'] = len(security_report.get('suspicious_addresses', []))
 
 
-        if 'warnings' in security_report and security_report['warnings']:
-            report_lines.append("⚠️ Warning: Potentially risky address found.\n")
-            for warning in security_report['warnings']:
-                report_lines.append(f"  Address: {warning['address']}, Comment: {warning['comment']}\n")
-        
-        if 'suspicious_urls' in security_report and security_report['suspicious_urls']:
-            report_lines.append("⚠️ Suspicious URL(s) found in the contract.\n")
-            for url, comment in security_report['suspicious_urls'].items():
-                report_lines.append(f"  URL: {url}, Reason: {comment}\n")
-        
-        if 'suspicious_addresses' in security_report and security_report['suspicious_addresses']:
-            report_lines.append("⚠️ Suspicious address(es) found in the contract.\n")
-            for token, address in security_report['suspicious_addresses'].items():
-                report_lines.append(f"  Token: {token}, Suspicious Address: {address}\n")
+            if 'warnings' in security_report and security_report.get('warnings'):
+                report_lines.append("⚠️ Warning: Potentially risky address found.\n")
+                for warning in security_report['warnings']:
+                    report_lines.append(f"  Address: {warning['address']}, Comment: {warning['comment']}\n")
+            
+            if 'suspicious_urls' in security_report and security_report.get('suspicious_urls'):
+                report_lines.append("⚠️ Suspicious URL(s) found in the contract.\n")
+                for url, comment in security_report['suspicious_urls'].items():
+                    report_lines.append(f"  URL: {url}, Reason: {comment}\n")
+            
+            if 'suspicious_addresses' in security_report and security_report.get('suspicious_addresses'):
+                report_lines.append("⚠️ Suspicious address(es) found in the contract.\n")
+                for token, address in security_report['suspicious_addresses'].items():
+                    report_lines.append(f"  Token: {token}, Suspicious Address: {address}\n")
 
         if pbar:
             pbar.update(5)
@@ -145,9 +147,13 @@ def security_analysis(token_address: str, chain: str, results: dict, report_line
 def liquidity_analysis(token_address: str, chain: str, results: dict, report_lines: list, web3, pbar=None):
     print("\n🔍 Running liquidity analysis...")
     results['analyses']['liquidity'] = {
-            'liquidity_depth': None,
-            'liquidity_metrics': None,
-            'volume_metrics': None,
+            'price_usd': None,
+            'liquidity_usd': None,
+            'market_cap_usd': None,
+            'liquidity_to_market_cap_ratio': None,
+            'token_volume': None,
+            'volume_usd': None,
+            'volume_to_liquidity_ratio': None,
             "locked_liquidity_percent": None,
             "locked_95_for_15_days": None,
             "creator_under_5_percent": None,
@@ -156,60 +162,91 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
             "owner_percent_of_lp": None,
             "total_lp_supply": None,
             "lp_holders_count": None,
-            "lp_holders": None
+            "lp_holders": None 
         }
     report_lines.append("\nLiquidity Analysis\n-----------------\n")
     try:
+        lp_address, pair_abi = utils.get_lp_pair(token_address,chain,web3)
         data = utils.get_dexscreener_price_liquidity_volume(token_address)
         if not data:
-            report_lines.append(f"⚠️ ERROR: no pair token data found!")
-            price, liquidity_pool_depth, volume = None, None, None
+            dexscreenerok = False
+            data = utils.get_price_and_liquidity(lp_address,token_address,chain,web3)
+            price = data['price_usd']
+            liquidity = data['liquidity_usd']
+            if not data:
+                report_lines.append(f"⚠️ ERROR: no pair token data found!")
+                price, liquidity, volume = None, None, None
+        elif data:
+            dexscreenerok = True
+            price, liquidity, volume = data
         else:
-            price, liquidity_pool_depth, volume = data
-        total_c_supply = results['analyses']['holders'].get('total_circulating_supply')
+            dexscreenerok = False
+            report_lines.append(f"⚠️ ERROR: no pair token data found!")
+            price, liquidity, volume = None, None, None
+
+        total_c_supply = results['analyses']['holder'].get('total_circulating_supply')
         if total_c_supply == None:
             coingecko_id = utils.get_coingecko_id_from_contract(token_address, chain)
             if coingecko_id != None:
                 total_c_supply = utils.get_circulating_supply(coingecko_id)
             elif coingecko_id == None:
-                total_c_supply = utils.get_circulating_supply_estimate(token_address,chain,holders)
-        
-        holders = results['analyses']['holders'].get('holders_list',None)
-        if holders == None:
-            # holders = utils.get_unique_token_holders_moralis(token_address,chain)
-            if holders == None:
-                creation = utils.get_contract_creation_tx(token_address, chain)
-                creation_block = int(creation["blocknum"])
-                last_block = int(utils.get_latest_tx(token_address,chain)['blockNumber'])
-                abi = results['analyses']['contract'].get('abi',utils.get_contract_info(token_address,chain)['abi'])
-                holders = utils.get_unique_token_holders_web3(token_address,web3,abi,creation_block,last_block)
+                holders = results['analyses']['holder'].get('holders_list',None)
                 if holders == None:
-                    error_msg = "Failed to retrieve holders data."
-                    # results.setdefault('analyses', {}).setdefault('holders', {})['error'] = error_msg
-                    report_lines.append(f"⚠️ Liquidity analysis error: {error_msg}\n")
-        liq_market_ratio = utils.get_liquidity_to_marketcap_ratio(token_address,chain,holders,total_c_supply,data)
-        vol_liq_ratio = utils.get_volume_to_liquidity_ratio(data)
+                    # holders = utils.get_unique_token_holders_moralis(token_address,chain)
+                    if holders == None:
+                        creation = utils.get_contract_creation_tx(token_address, chain)
+                        creation_block = int(creation["blocknum"])
+                        last_block = int(utils.get_latest_tx(token_address,chain)['blockNumber'])
+                        abi = results['analyses']['contract'].get('abi',utils.get_contract_info(token_address,chain)['abi'])
+                        holders = utils.get_unique_token_holders_API(token_address,chain)
+                        if not holders:
+                            holders = utils.get_unique_token_holders_web3(token_address,chain,web3,abi,creation_block,last_block)
+                            if holders == None:
+                                error_msg = "Failed to retrieve holders data."
+                                # results.setdefault('analyses', {}).setdefault('holders', {})['error'] = error_msg
+                                report_lines.append(f"⚠️ Liquidity analysis error: {error_msg}\n")
+                    total_supply = utils.get_total_supply(token_address,chain)
+                    total_c_supply = utils.get_circulating_supply_estimate(token_address,chain,total_supply,holders)
         
-        lp_address, pair_abi = utils.get_lp_pair(token_address,chain,web3)
-        creation = utils.get_contract_creation_tx(token_address,'bsc')
+        creation = utils.get_contract_creation_tx(lp_address,chain)
         creation_timestamp = creation["timestamp"]
         creation_blocknum = int(creation["blocknum"])
-        #liquidity_holders = get_lp_holders(lp_address, web3, pair_abi, from_block=creation_blocknum,to_block="latest")
-        
+        last_block = int(utils.get_latest_tx(lp_address,chain)['blockNumber'])
+
         liquidity_status = utils.analyze_lp_security(token_address,chain)
         liquidity_holders = liquidity_status["lp_holders"]
+        # WITHOUT API YOU WOULD USE THE ONE BELOW
+        #TODO compute the time difference between the two. 
+        # liquidity_holders = utils.get_lp_holders(lp_address, web3, pair_abi, creation_blocknum,last_block)
+        if not dexscreenerok:
+            # print(web3,lp_address,last_block,chain,price,liquidity)
+            fres = utils.get_volume_to_liquidity_ratio(web3,lp_address,last_block,chain,float(price),float(liquidity))
+            vol_liq_ratio = fres['vol_liq_ratio']
+            volume_24h = fres['volume_usd']
+        else:
+            price, liquidity, volume_24h = utils.get_dexscreener_price_liquidity_volume(token_address)
+            fres = utils.get_volume_to_liquidity_ratio(web3,lp_address,last_block,chain,price,liquidity)
+            vol_liq_ratio = fres['vol_liq_ratio']
+            volume_24h = fres['volume_usd'] #TODO check docs
+
+        liq_market_ratio = utils.get_liquidity_to_marketcap_ratio(total_c_supply,price,liquidity)
+        
+
 
         lp_contract = web3.eth.contract(address=config.Web3.to_checksum_address(lp_address), abi=pair_abi)
         total_lp_supply = lp_contract.functions.totalSupply().call()
-        
         owner = results["analyses"]["contract"].get("owner",utils.get_owner(token_address, chain))
         #owner_lp_balance = lp_address.functions.balanceOf(owner).call()
         creator = results["analyses"]["contract"].get("creator",utils.get_creator(token_address, chain))
         
         results['analyses']['liquidity'] = {
-            'liquidity_depth': liquidity_pool_depth,
-            'liquidity_metrics': liq_market_ratio,
-            'volume_metrics': vol_liq_ratio,
+            'price_usd': price,
+            'liquidity_usd': liquidity,
+            'market_cap_usd': liq_market_ratio['market_cap_usd'],
+            'liquidity_to_market_cap_ratio': liq_market_ratio['liquidity_to_market_cap_ratio'],
+            'token_volume': fres['token_volume'],
+            'volume_usd': fres['volume_usd'],
+            'volume_to_liquidity_ratio': fres['vol_liq_ratio'],
             "locked_liquidity_percent": liquidity_status['locked_liquidity_percent'],
             "locked_95_for_15_days": liquidity_status['locked_95_for_15_days'],
             "creator_under_5_percent": liquidity_status['creator_under_5_percent'],
@@ -218,16 +255,17 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
             "owner_percent_of_lp": liquidity_status['owner_percent_of_lp'],
             "total_lp_supply": liquidity_status['total_lp_supply'],
             "lp_holders_count": liquidity_status['lp_holders_count'],
-            "lp_holders": liquidity_status['lp_holders']
+            "lp_holders": liquidity_holders
         }
         
-        report_lines.append("\nLiquidity Analysis\n-----------------\n")
         if liq_market_ratio:
             report_lines.append(f"Market Cap: ${liq_market_ratio['market_cap_usd']:,.2f}\n")
-            report_lines.append(f"Liquidity: ${liquidity_pool_depth:,.2f}\n")
+            report_lines.append(f"Liquidity: ${liquidity:,.2f}\n")
             report_lines.append(f"Liquidity/MCap Ratio: {liq_market_ratio['liquidity_to_market_cap_ratio']:.4f}\n")
         if vol_liq_ratio:
-            report_lines.append(f"24h Volume/Liquidity Ratio: {vol_liq_ratio['volume_to_liquidity_ratio']:.4f}\n")
+            report_lines.append(f"Token Volume: {fres['token_volume']:.4f}\n")
+            report_lines.append(f"USD Volume: {fres['volume_usd']:.4f}\n")
+            report_lines.append(f"24h Volume/Liquidity Ratio: {fres['vol_liq_ratio']:.4f}\n")
         if liquidity_status:
             report_lines.append(f"Percentage of liquidity locked: {liquidity_status['locked_liquidity_percent']:.4f}\n")
             report_lines.append(f"Was 95% of liquidity locked for more than 15 days?: {liquidity_status['locked_95_for_15_days']}\n")
@@ -284,7 +322,7 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
 
 def holder_analysis(token_address: str, chain: str, results: dict, report_lines: list, web3, pbar=None):
     print("\n🔍 Running holder analysis...")
-    results['analyses']['holders'] = {
+    results['analyses']['holder'] = {
         'total_holders': 0,
         'holders_list': None,
         'total_circulating_supply': 0,
@@ -294,43 +332,45 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
         'howmany_holders_exceeding_5_percent': 0,
         'top_10_holders': None,
         'total_top_10_balance': None,
-        'top10_percentage_of_circulating_supply': None,
         'top10_percentage_of_total_supply': None,
+        'top10_percentage_of_circulating_supply': None,
+        'top_10_less_than_70_percent_of_total': None,
         'top_10_less_than_70_percent_of_circulating': None
     }
     report_lines.append("\nHolder Analysis\n--------------\n") 
     try:
-        abi = results['analyses']['contract'].get('abi',utils.get_contract_info(token_address,chain)['abi'])
+        abi = results['analyses']['contract'].get('abi')
         if abi == None:
-            error_msg = "ABI not found or contract info unavailable for holder analysis."
-            # results.setdefault('analyses', {}).setdefault('holders', {})['error'] = error_msg
-            report_lines.append(f"⚠️ Holder analysis error: {error_msg}\n")
-            # if pbar:
-            #     pbar.update(12)
-            # return results, report_lines
-        
-        holders_list = None #TODO only use when moralis is not useable
-        #holders_list = utils.get_unique_token_holders_moralis(token_address, chain)
-        if holders_list == None:
-            creation = utils.get_contract_creation_tx(token_address, chain)
-            creation_block = int(creation["blocknum"])
-            last_block = int(utils.get_latest_tx(token_address,chain)['blockNumber'])
-            holders_list = utils.get_unique_token_holders_web3(token_address,web3,abi,creation_block,last_block)
-            if holders_list == None:
-                error_msg = "Failed to retrieve holders data."
-                # results.setdefault('analyses', {}).setdefault('holders', {})['error'] = error_msg
+            abi = utils.get_contract_info(token_address,chain).get('abi')
+            if not abi:
+                error_msg = "ABI not found or contract info unavailable for holder analysis."
                 report_lines.append(f"⚠️ Holder analysis error: {error_msg}\n")
-                # if pbar:
-                #     pbar.update(12)
-                # return results, report_lines
         
+        #NOTE only use others when moralis is not useable
+        holders_list = utils.get_unique_token_holders_moralis(token_address, chain)
+        if not holders_list:
+            #holders_list = utils.get_unique_token_holders_API(token_address,chain)
+            if not holders_list:
+                if holders_list == set() and abi != None:
+                    creation = utils.get_contract_creation_tx(token_address, chain)
+                    creation_block = int(creation["blocknum"]) if creation else None
+                    last_tx = utils.get_latest_tx(token_address,chain)
+                    last_block = int(last_tx['blockNumber']) if last_tx else None
+                    
+                    holders_list = utils.get_unique_token_holders_web3(token_address,chain,web3,abi,creation_block,last_block) if creation_block and last_block and abi else None
+                    if holders_list == None:
+                        error_msg = "Failed to retrieve holders data."
+                        # results.setdefault('analyses', {}).setdefault('holders', {})['error'] = error_msg
+                        report_lines.append(f"⚠️ Holder analysis error: {error_msg}\n")
+
+        
+        total_supply = utils.get_total_supply(token_address,chain)
         coingecko_id = utils.get_coingecko_id_from_contract(token_address, chain)
         if coingecko_id != None:
             total_c_supply = utils.get_circulating_supply(coingecko_id)
         else:
-            total_c_supply = utils.get_circulating_supply_estimate(token_address, chain, holders_list)
-
-        total_c_supply = int(config.Decimal(total_c_supply) * 10**18) #TODO check if estimate has to be converted or not
+            #total_c_supply = total_supply #NOTE testing purposes only
+            total_c_supply = utils.get_circulating_supply_estimate(token_address, chain, total_supply, holders_list)
 
         owner = results['analyses']['contract'].get('owner')
         creator = results['analyses']['contract'].get('creator')
@@ -352,7 +392,6 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
         #         'compliant': len(flagged_holders) == 0
         #     }
         # }
-        total_supply = utils.get_total_supply(token_address,chain)
         top10_analysis_results = utils.top10_analysis(token_address, chain, holders_list,total_supply, total_c_supply)
         #     result = {
         #     'top_10_holders': top_10_data,
@@ -363,6 +402,7 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
         #         'top_10_less_than_70_percent_circulating': percentage_circ_total < 70
         #     }
         # }
+        print(f"Debug: Storing holders list with length: {len(holders_list) if holders_list else 'None'}")
         enriched_dict = {}
         owner_dict = {}
         creator_dict = {}
@@ -387,14 +427,17 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
                 }
                 continue
             enriched_dict[address] = {
-                "balance": balance,
-                "age": age
+                'balance': balance,
+                'age': age,
+                'percentage_of_total_supply': balance / total_supply * 100,
+                'percentage_of_circulating_supply': balance / total_c_supply * 100
             }
 
 
-        results['analyses']['holders'] = {
+        results['analyses']['holder'] = {
             'total_holders': len(holders_list),
             'holders_list': enriched_dict,
+            'total_supply': total_supply,
             'total_circulating_supply': total_c_supply,
             'owner': owner_dict,
             'creator': creator_dict,
@@ -402,14 +445,15 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
             'howmany_holders_exceeding_5_percent': holder_analysis_results['summary']['holders_exceeding_5_percent'],
             'top_10_holders': top10_analysis_results['top_10_holders'],
             'total_top_10_balance': top10_analysis_results['totals']['total_top_10_balance'],
-            'top10_percentage_of_circulating_supply': top10_analysis_results['totals']['percentage_of_circulating_supply'],
-            'top10_percentage_of_total_supply': top10_analysis_results['totals']['percentage_of_total_supply'],
+            'top10_percentage_of_total_supply': top10_analysis_results['totals']['total_top_10_percentage_of_total_supply'],
+            'top10_percentage_of_circulating_supply': top10_analysis_results['totals']['total_top_10_percentage_of_circulating_supply'],
+            'top_10_less_than_70_percent_of_total': top10_analysis_results['totals']['top_10_less_than_70_percent_total_supply'],
             'top_10_less_than_70_percent_of_circulating': top10_analysis_results['totals']['top_10_less_than_70_percent_circulating']
         }  
 
         # Report Owner Section
-        owner_data = results['analyses']['holders'].get('owner')
-        creator_data = results['analyses']['holders'].get('creator')
+        owner_data = results['analyses']['holder'].get('owner')
+        creator_data = results['analyses']['holder'].get('creator')
         
         report_lines.append(f"Total Unique Holders: {len(holders_list)}\n")
 
@@ -435,7 +479,7 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
         else:
             report_lines.append("⚠️ Creator information is not available (possibly hidden or unverified)\n")
 
-        res = results['analyses']['holders']
+        res = results['analyses']['holder']
 
         if res.get('holders_exceeding_5_percent'):
             over_5 = res.get('howmany_holders_exceeding_5_percent', 0)
@@ -511,7 +555,10 @@ def contract_analysis(token_address: str, chain: str, results: dict, report_line
             return results, report_lines
         
         sellable = utils.is_token_sellable(token_address, chain)
-        hardcoded = utils.is_hardcoded_owner(token_address, chain)
+        if contract_info.get('source_code') != None:
+            hardcoded = utils.is_hardcoded_owner(token_address, chain,contract_info['source_code'])
+        else:
+            hardcoded = None
         owner = utils.get_owner(token_address, chain)
         creator = utils.get_creator(token_address, chain)
 
@@ -524,14 +571,15 @@ def contract_analysis(token_address: str, chain: str, results: dict, report_line
         report_lines.append(f"Is owner hardcoded: {'Yes' if hardcoded else 'No'}\n")
 
         
-        analysis = utils.analyze_token_contract_with_snippets(contract_info['source_code'],pbar=pbar) if contract_info.get('source_code') else None
+        analysis = utils.analyze_token_contract_with_snippets(contract_info['source_code'],pbar=pbar) if contract_info.get('source_code')!= None else None
 
         report_lines.append("\nCode Analysis Findings:\n")
-        for category, data in analysis.items():
-            if data['found']:
-                report_lines.append(f"WARNING: {category.replace('_', ' ').title()}\n")
-                for snippet in data['snippets']:
-                    report_lines.append(f"  Code Snippet:\n{snippet}\n\n")
+        if analysis != None:
+            for category, data in analysis.items():
+                if data['found']:
+                    report_lines.append(f"WARNING: {category.replace('_', ' ').title()}\n")
+                    for snippet in data['snippets']:
+                        report_lines.append(f"  Code Snippet:\n{snippet}\n\n")
         
         results['analyses']['contract'] = {
             "contract_name": contract_info.get('contract_name', None),

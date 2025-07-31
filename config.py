@@ -7,6 +7,7 @@ import math
 import csv
 import inspect
 import time
+from eth_abi.abi import decode as decode_abi
 from typing import Union, Dict
 from decimal import Decimal
 from web3 import Web3
@@ -42,4 +43,53 @@ BASE_URL_ETH = "https://api.etherscan.io/api"
 RPC_BSC = "https://rpc.ankr.com/bsc/593a18aac4d0ae56b4f6dfcc2785e56d01515b0bcd30d6d52c9645b65cd1df95"
 RPC_ETH = f"https://mainnet.infura.io/v3/{INFURA}"
 
-DEBUG = False
+# Common pair ABI
+PAIR_ABI = json.loads("""
+[
+  {"inputs":[],"name":"getReserves","outputs":[
+    {"type":"uint112","name":"reserve0"},
+    {"type":"uint112","name":"reserve1"},
+    {"type":"uint32","name":"blockTimestampLast"}],
+    "stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"token0","outputs":[{"type":"address"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"token1","outputs":[{"type":"address"}],"stateMutability":"view","type":"function"}
+]
+""")
+
+# Stablecoin references
+STABLECOINS = {
+    "eth": {
+        "usdc": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",  # USDC
+        "usdt": "0xdAC17F958D2ee523a2206206994597C13D831ec7"   # USDT
+    },
+    "bsc": {
+        "busd": "0xe9e7cea3dedca5984780bafc599bd69add087d56",  # BUSD
+        "usdt": "0x55d398326f99059ff775485246999027b3197955"   # USDT
+    }
+}
+
+# Known reference pairs for resolving token → USD
+REFERENCE_PAIRS = {
+    "eth": {
+        "weth_usdc": {
+            "pair": "0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc",  # USDC/WETH
+            "token0": STABLECOINS["eth"]["usdc"],  # USDC
+            "token1": "0xC02aaA39b223FE8D0A0E5C4F27eAD9083C756Cc2",  # WETH
+            "token0_decimals": 6,
+            "token1_decimals": 18
+        }
+    },
+    "bsc": {
+        "wbnb_busd": {
+            "pair": "0x1b96b92314c44b159149f7e0303511fb2fc4774f",  # BUSD/WBNB
+            "token0": STABLECOINS["bsc"]["busd"],  # BUSD
+            "token1": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",  # WBNB
+            "token0_decimals": 18,
+            "token1_decimals": 18
+        }
+    }
+}
+
+
+GRAPHQL_URL = "https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v2"
+DEBUG = True
