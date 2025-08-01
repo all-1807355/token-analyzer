@@ -19,6 +19,25 @@ from goplus.token import Token
 from typing import Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
+from threading import Lock
+
+class RateLimiter:
+    def __init__(self, max_calls, period):
+        self.lock = Lock()
+        self.max_calls = max_calls
+        self.period = period
+        self.calls = []
+
+    def acquire(self):
+        with self.lock:
+            now = time.time()
+            self.calls = [t for t in self.calls if now - t < self.period]
+            if len(self.calls) >= self.max_calls:
+                time_to_wait = self.period - (now - self.calls[0])
+                time.sleep(time_to_wait)
+            self.calls.append(time.time())
+
+scan_rate_limiter = RateLimiter(max_calls=5, period=1.0)
 
 #pass smellytokens2025 or Smelly@tokens2025 (infura)
 ETHERSCAN_API_KEY = "YI5IUPU68CCB5AWVF8TP3T2BKY9FXW4QUH"

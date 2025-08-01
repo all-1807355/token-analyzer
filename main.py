@@ -122,9 +122,9 @@ def analyze_token(token_address: str, chain: str, analysis_types: list = None) -
 
     report = ''.join(report_lines)
     timestamp = config.datetime.now().strftime('%Y%m%d_%H%M%S')
-    config.os.makedirs('test', exist_ok=True)
-    report_filename = config.os.path.join('test', f"token_analysis_{token_address[:8]}_{filename_suffix}_{timestamp}.txt")
-    json_filename = config.os.path.join('test', f"token_analysis_{token_address[:8]}_{filename_suffix}_{timestamp}.json")
+    config.os.makedirs('test_data_analysis', exist_ok=True)
+    report_filename = config.os.path.join('test_data_analysis', f"token_analysis_{token_address[:8]}_{filename_suffix}_{timestamp}.txt")
+    json_filename = config.os.path.join('test_data_analysis', f"token_analysis_{token_address[:8]}_{filename_suffix}_{timestamp}.json")
     with open(report_filename, 'w', encoding='utf-8') as f:
         f.write(report)
 

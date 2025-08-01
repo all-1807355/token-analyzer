@@ -39,6 +39,7 @@ def api_call(params: dict, chain: str = 'eth'):
 """----------------------------------------"""
 
 def get_token_name(token_address: str, chain: str) -> str:
+    config.scan_rate_limiter.acquire()
     """
     Returns the token name
 
@@ -70,6 +71,7 @@ def get_token_name(token_address: str, chain: str) -> str:
     return "[name() not implemented]"
 
 def get_contract_info(contract_address: str, chain: str) -> dict:
+    config.scan_rate_limiter.acquire()
     """
     Returns basic information about the input smart contract
 
@@ -141,6 +143,7 @@ def get_contract_info(contract_address: str, chain: str) -> dict:
     }
 
 def is_contract_verified(contract: str, chain: str) -> int:
+    config.scan_rate_limiter.acquire()
     """
     Checks if a smart contract for a token is verified
 
@@ -164,6 +167,7 @@ def is_contract_verified(contract: str, chain: str) -> int:
     return int(res["status"])
 
 def get_contract_creation_tx(contract: str, chain: str) -> dict:
+    config.scan_rate_limiter.acquire()
     """
     Retrieves the transaction that created the token
 
@@ -240,6 +244,7 @@ def get_creation_to_first_trade_delay(token: str, chain: str) -> dict:
 
 
 def get_transaction_from_hash(hash: str, chain: str):
+    config.scan_rate_limiter.acquire()
     params = {
         'module': 'proxy',
         'action': 'eth_getTransactionByHash',
@@ -250,6 +255,7 @@ def get_transaction_from_hash(hash: str, chain: str):
 
 def get_latest_account_tx(address: str, chain: str):
     #TRANSFERS INVOLVING THE ADDRESS
+    config.scan_rate_limiter.acquire()
     params = {
         "module": "account",
         "action": "tokentx",
@@ -264,6 +270,7 @@ def get_latest_account_tx(address: str, chain: str):
 
 def get_latest_tx(token: str, chain: str):
     #TRANSFERS INVOLVING ONLY THE TOKEN
+    config.scan_rate_limiter.acquire()
     params = {
         "module": "account",
         "action": "tokentx",
@@ -293,6 +300,7 @@ def get_latest_tx(token: str, chain: str):
 
 
 def get_receipt_logs(hash: str, chain: str):
+    config.scan_rate_limiter.acquire()
     params = {
         "module": "proxy",
         "action": "eth_getTransactionReceipt",
@@ -331,6 +339,7 @@ def check_swap(transfers):
     return None
 
 def get_timestamp_from_blocknum(blocknum,chain):
+    config.scan_rate_limiter.acquire()
     params = {
             'module': 'proxy',
             'action': 'eth_getBlockByNumber',
@@ -362,6 +371,7 @@ def get_token_age(token_address,chain):
     return age_seconds
 
 def last_active_age(token_address,chain):
+    config.scan_rate_limiter.acquire()
     params = {
         'module': 'account',
         'action': 'txlist',
@@ -399,6 +409,7 @@ def last_active_age(token_address,chain):
 
 
 def get_token_balance_API(token,account,chain):
+    config.scan_rate_limiter.acquire()
     params = {
         'module': 'account',
         'action': 'tokenbalance',
@@ -424,6 +435,7 @@ def get_token_balance_web3(address: str, token: str, web3: config.Web3, abi: lis
 
 
 def get_latest_block(chain):
+    config.scan_rate_limiter.acquire()
     if chain == 'eth':
         chain_id = 1
     elif chain == 'bsc':
@@ -441,6 +453,7 @@ def get_latest_block(chain):
 
 
 def get_tx_list(address: str, startblock: int, endblock, chain: str) -> list:
+    config.scan_rate_limiter.acquire()
     """
     Retrieves a list of transactions for a given address between specified blocks.
 
@@ -474,10 +487,10 @@ def get_tx_list(address: str, startblock: int, endblock, chain: str) -> list:
         print(f"No transactions found or API error for address: {address}")
         return []
 
-import time
 
 def get_holder_age(address, chain):
     def fetch_earliest_tx(action, extra_params=None):
+        config.scan_rate_limiter.acquire()
         debug_print(f"Fetching {action} transactions for {address}")
         params = {
             "module": "account",
@@ -517,7 +530,7 @@ def get_holder_age(address, chain):
 
     # Sequential calls with delay to avoid rate limits
     earliest_tx_time = fetch_earliest_tx("txlist")
-    time.sleep(0.6)  # 600ms delay to stay under 2/sec limit
+    config.time.sleep(0.6)  # 600ms delay to stay under 2/sec limit
     earliest_token_tx_time = fetch_earliest_tx("tokentx", {"apikey": config.BSCSCAN_API_KEY})
 
     # Combine timestamps
@@ -689,7 +702,7 @@ def get_unique_token_holders_moralis(token, chain, max_pages=2, delay_seconds=1)
             print(f"Max pages limit reached: {max_pages}")
             break
 
-        time.sleep(delay_seconds)  # simple rate limiter
+        config.time.sleep(delay_seconds)  # simple rate limiter
 
     return {
         entry['owner_address'].lower(): int(float(entry['balance']))
@@ -715,6 +728,7 @@ def is_hardcoded_owner(token,chain,info):
 
 #HOLDER ANALYSIS
 def get_owner(token,chain):
+    config.scan_rate_limiter.acquire()
     functionnames = ["owner","getowner","getOwner","admin"]
     for function in functionnames:
         func = '0x' + config.keccak(text=function + '()').hex()[:8]
@@ -739,6 +753,7 @@ def get_owner(token,chain):
     return None
     
 def get_creator(token,chain):
+    config.scan_rate_limiter.acquire()
     params = {
         'module': 'contract',
         'action': 'getcontractcreation',
@@ -749,6 +764,7 @@ def get_creator(token,chain):
     return res['result'][0]['contractCreator'] if res['status']=='1' else None
 
 def get_total_supply(token,chain):
+    config.scan_rate_limiter.acquire()
     params = {
         'module': 'stats',
         'action': 'tokensupply',
@@ -931,6 +947,7 @@ def effective_slippage_rate(address,chain):
     }
 
 def fetch_latest_tx_list(token_address, chain, count=2):
+    config.scan_rate_limiter.acquire()
     params = {
         "module": "account",
         "action": "tokentx",
@@ -943,6 +960,7 @@ def fetch_latest_tx_list(token_address, chain, count=2):
     return res.get("result", [])
 
 def is_contract(address,chain):
+    config.scan_rate_limiter.acquire()
     params = {
         'module': 'proxy',
         'action': 'eth_getCode',
@@ -1321,7 +1339,6 @@ def get_unlock_timestamp(locker_address: str, lp_token_address: str, chain: str,
                 unlock_time = fn(lp_token_address).call()
             except:
                 unlock_time = fn().call()
-            # Must be a plausible future timestamp
             if unlock_time > int(config.time.time()):
                 print(f"✅ Unlock time for {locker_address} from `{method}`: {unlock_time}")
                 return unlock_time
@@ -1365,6 +1382,7 @@ def find_lockers_by_methods(token: str, chain: str, addresses: set[str]) -> set[
     return lockers
 
 def find_latest_tx_block(address, chain):
+    config.scan_rate_limiter.acquire()
     """Get the latest transaction block by scanning backward."""
     latest_block = None
     step = 50000
@@ -1427,6 +1445,7 @@ def isburner(address,chain,creation_blocknum,last_block):
     return True
 
 def get_token_transfers(token,chain):
+    config.scan_rate_limiter.acquire()
     creation = get_contract_creation_tx(token,chain)
     creation_blocknum = int(creation["blocknum"]) 
     last_block = int(get_latest_tx(token,chain)['blockNumber'])
@@ -1444,6 +1463,7 @@ def get_token_transfers(token,chain):
     return res["result"] if res and "result" in res else None#['result'] if res['result'] else None
 
 def get_first_account_tx(address: str, chain: str) -> dict:
+    config.scan_rate_limiter.acquire()
     """
     Retrieves the first transaction involving the given address.
 
@@ -1478,7 +1498,7 @@ def get_first_account_tx(address: str, chain: str) -> dict:
         return None
 
 def get_account_token_transfers(address,chain):
-
+    config.scan_rate_limiter.acquire()
     tx = get_first_account_tx(address, chain) or get_contract_creation_tx(address, chain)
     if tx:
         creation_blocknum = tx['blocknum']
@@ -1697,18 +1717,19 @@ def get_circulating_supply_estimate(token,chain,total_supply,addresses = ''):
         holders = addresses
     c_supply = 0
     locked_or_burned_supply = 0
-    tx = get_first_account_tx(token, chain) or get_contract_creation_tx(token, chain)
-    if tx:
-        creation_blocknum = tx['blocknum']
-    else:
-        creation_blocknum = 0
-    last_block = find_latest_tx_block(token,chain)
-    if not last_block:
-        last_block = 'latest'
+    #NOTE REMOVED FOR TESTING
+    # tx = get_first_account_tx(token, chain) or get_contract_creation_tx(token, chain)
+    # if tx:
+    #     creation_blocknum = tx['blocknum']
+    # else:
+    #     creation_blocknum = 0
+    # last_block = find_latest_tx_block(token,chain)
+    # if not last_block:
+    #     last_block = 'latest'
 
     for holder,balance in config.tqdm(holders.items(), desc="Calculating Circulating Supply", unit="address"):
-        # print(holder,balance)
-        if islocker(holder,chain) or isburner(holder,chain,creation_blocknum,last_block):
+        #NOTE values set to 0 for testing
+        if islocker(holder,chain) or isburner(holder,chain,creation_blocknum = 0,last_block = 0):
             locked_or_burned_supply += balance
         else:
             c_supply += balance
