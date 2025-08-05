@@ -192,7 +192,7 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
             elif coingecko_id == None:
                 holders = results['analyses']['holder'].get('holders_list',None)
                 if holders == None:
-                    # holders = utils.get_unique_token_holders_moralis(token_address,chain)
+                    holders = utils.get_unique_token_holders_moralis(token_address,chain)
                     if holders == None:
                         creation = utils.get_contract_creation_tx(token_address, chain)
                         creation_block = int(creation["blocknum"])
@@ -234,7 +234,11 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
 
 
         lp_contract = web3.eth.contract(address=config.Web3.to_checksum_address(lp_address), abi=pair_abi)
-        total_lp_supply = lp_contract.functions.totalSupply().call()
+        if liquidity_status.get('total_lp_supply',None):
+            total_lp_supply = liquidity_status['total_lp_supply']
+        else:
+            total_lp_supply = lp_contract.functions.totalSupply().call()
+        # total_lp_supply = utils.get_total_supply(token_address,chain)
         owner = results["analyses"]["contract"].get("owner",utils.get_owner(token_address, chain))
         #owner_lp_balance = lp_address.functions.balanceOf(owner).call()
         creator = results["analyses"]["contract"].get("creator",utils.get_creator(token_address, chain))
@@ -345,8 +349,9 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
             if not abi:
                 error_msg = "ABI not found or contract info unavailable for holder analysis."
                 report_lines.append(f"⚠️ Holder analysis error: {error_msg}\n")
-        
+
         #NOTE only use others when moralis is not useable
+        holders_list = None
         holders_list = utils.get_unique_token_holders_moralis(token_address, chain)
         if not holders_list:
             holders_list = utils.get_unique_token_holders_API(token_address,chain)
@@ -363,7 +368,6 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
                         # results.setdefault('analyses', {}).setdefault('holders', {})['error'] = error_msg
                         report_lines.append(f"⚠️ Holder analysis error: {error_msg}\n")
 
-        
         total_supply = utils.get_total_supply(token_address,chain)
         coingecko_id = utils.get_coingecko_id_from_contract(token_address, chain)
         if coingecko_id != None:
@@ -376,14 +380,16 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
         creator = results['analyses']['contract'].get('creator')
         if owner == None:
             owner = utils.get_owner(token_address,chain)
-            if owner == None:
+            if creator == None:
                 creator = utils.get_creator(token_address,chain)
-        if owner != None:
+        if owner is not None:
             owner_percentage,owner_flag = utils.owner_circulating_supply_analysis(token_address,chain,owner,total_c_supply,web3,abi)
-        if creator != None:
+
+        if creator is not None:
             creator_percentage,creator_flag = utils.owner_circulating_supply_analysis(token_address,chain,creator,total_c_supply,web3,abi)
+
         
-        holder_analysis_results = utils.holder_circulating_supply_analysis(token_address, chain, holders_list, total_c_supply, web3, abi,owner,creator)
+        holder_analysis_results = utils.holder_circulating_supply_analysis(holders_list, total_c_supply)
         #     result = {
         #     'flagged_holders': flagged_holders,
         #     'summary': {
@@ -392,7 +398,7 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
         #         'compliant': len(flagged_holders) == 0
         #     }
         # }
-        top10_analysis_results = utils.top10_analysis(token_address, chain, holders_list,total_supply, total_c_supply)
+        top10_analysis_results = utils.top10_analysis(holders_list,total_supply, total_c_supply)
         #     result = {
         #     'top_10_holders': top_10_data,
         #     'totals': {
@@ -402,33 +408,36 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
         #         'top_10_less_than_70_percent_circulating': percentage_circ_total < 70
         #     }
         # }
-        print(f"Debug: Storing holders list with length: {len(holders_list) if holders_list else 'None'}")
+        # print(f"Debug: Storing holders list with length: {len(holders_list) if holders_list else 'None'}")
         enriched_dict = {}
         owner_dict = {}
         creator_dict = {}
         for address, balance in holders_list.items():
-            age = utils.get_holder_age(address, chain)
-            if address == owner:
+            # age,age_readable = utils.get_holder_age(token_address, chain,address).values()
+            if owner is not None and address.lower() == owner.lower():
                 owner_dict = {
                     'address': owner,
                     'balance': balance,
-                    'age':age,
+                    # 'age':age,
+                    # 'age_readable': age_readable,
                     'percentage_of_supply': owner_percentage,
                     'exceeds_5_percent': owner_flag
                 }
                 continue
-            if address == creator:
+            if creator is not None and address.lower() == creator.lower():
                 creator_dict = {
                     'address': creator,
                     'balance': balance,
-                    'age':age,
+                    # 'age':age,
+                    # 'age_readable': age_readable,
                     'percentage_of_supply': creator_percentage,
                     'exceeds_5_percent': creator_flag
                 }
                 continue
             enriched_dict[address] = {
                 'balance': balance,
-                'age': age,
+                # 'age': age,
+                # 'age_readable': age_readable,
                 'percentage_of_total_supply': balance / total_supply * 100,
                 'percentage_of_circulating_supply': balance / total_c_supply * 100
             }

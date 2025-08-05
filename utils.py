@@ -424,6 +424,17 @@ def get_token_balance_web3(address: str, token: str, web3: config.Web3, abi: lis
     """
     Retrieves the balance of `address` for an ERC-20 `token` using `web3.py`.
     """
+    if abi == None:
+        abi = [
+            {
+                "constant": True,
+                "inputs": [{"name": "_owner", "type": "address"}],
+                "name": "balanceOf",
+                "outputs": [{"name": "balance", "type": "uint256"}],
+                "type": "function",
+            }
+        ]
+
     try:
         contract = web3.eth.contract(address=config.Web3.to_checksum_address(token), abi=abi)
         balance = contract.functions.balanceOf(config.Web3.to_checksum_address(address)).call()
@@ -487,65 +498,64 @@ def get_tx_list(address: str, startblock: int, endblock, chain: str) -> list:
         print(f"No transactions found or API error for address: {address}")
         return []
 
+def get_holder_age(token, chain, address,max_pages=10,page_size=100):
+    config.scan_rate_limiter.acquire()
+    creation = get_contract_creation_tx(token, chain)
+    creation_block = int(creation["blocknum"])
+    last_block = int(get_latest_tx(token,chain)['blockNumber'])
+    if not creation_block and not last_block:
+        creation_block = 0
+        last_block = 'latest'
+    page = 1
 
-def get_holder_age(address, chain):
-    def fetch_earliest_tx(action, extra_params=None):
-        config.scan_rate_limiter.acquire()
-        debug_print(f"Fetching {action} transactions for {address}")
+    while page <= max_pages:
         params = {
             "module": "account",
-            "action": action,
+            "action": "tokentx",
             "address": address,
-            "startblock": 0,
-            "endblock": 99999999,
-            "page": 1,
-            "offset": 1,
+            "startblock": creation_block,
+            "endblock": last_block,
+            "page": page,
+            "offset": page_size,
             "sort": "asc",
         }
-        if extra_params:
-            params.update(extra_params)
 
         try:
-            if action == "tokentx":
-                res = config.requests.get(config.BASE_URL_BSC, params=params, timeout=10).json()
-            else:
-                res = api_call(params, chain)
-
-            # Handle rate limit message
-            if "rate limit" in str(res.get("result", "")).lower():
-                debug_print(f"Rate limit hit during {action} call")
-                return None
+            res = api_call(params, chain)
 
             if res.get("status") == "1" and res.get("result"):
-                first_tx = res["result"][0]
-                earliest_time = int(first_tx["timeStamp"])
-                debug_print(f"Earliest {action} tx timestamp: {config.datetime.fromtimestamp(earliest_time)}")
-                return earliest_time
+                token_txs = [
+                    tx for tx in res["result"]
+                    if tx.get("contractAddress", "").lower() == token.lower()
+                    and tx.get("to", "").lower() == address.lower()
+                ]
+
+                if token_txs:
+                    first_tx = token_txs[0]
+                    earliest_time = int(first_tx["timeStamp"])
+                    debug_print(f"Earliest received {token} tx for {address}: {config.datetime.fromtimestamp(earliest_time)}")
+                    age = int(config.time.time()) - earliest_time
+                    return {
+                        "holder_age": age,
+                        "holder_age_readable": str(config.timedelta(seconds=age))
+                    }
+
+                page += 1  # Go to next page
+                config.scan_rate_limiter.acquire()
+
             else:
-                debug_print(f"No {action} transactions found")
-                return None
+                debug_print(f"No more token transactions for {address} on page {page}")
+                break
+
         except Exception as e:
-            debug_print(f"Error fetching {action} transactions for {address}: {e}")
-            return None
+            debug_print(f"Error fetching token transactions on page {page} for {address}: {e}")
+            break
 
-    # Sequential calls with delay to avoid rate limits
-    earliest_tx_time = fetch_earliest_tx("txlist")
-    config.time.sleep(0.6)  # 600ms delay to stay under 2/sec limit
-    earliest_token_tx_time = fetch_earliest_tx("tokentx", {"apikey": config.BSCSCAN_API_KEY})
+    return {
+        "earliest_tx": None,
+        "holder_age": None
+    }
 
-    # Combine timestamps
-    if earliest_tx_time and earliest_token_tx_time:
-        earliest_time = min(earliest_tx_time, earliest_token_tx_time)
-    else:
-        earliest_time = earliest_tx_time or earliest_token_tx_time
-
-    if earliest_time:
-        dt = config.datetime.fromtimestamp(earliest_time).isoformat()
-        debug_print(f"Account creation time: {dt}")
-        return dt
-    else:
-        debug_print("No transactions found for address")
-        return None
 
 
 def get_unique_token_holders_web3(token_address: str, chain: str, web3: config.Web3, abi: list,
@@ -624,12 +634,11 @@ def get_unique_token_holders_web3(token_address: str, chain: str, web3: config.W
     print(f"✅ Found {len(holders)} holders with non-zero balances.")
     return holders
 
-def get_unique_token_holders_API(token, chain, max_addresses=200, max_workers: int = 5):
+def get_unique_token_holders_API(token, chain, max_addresses=200):
     addresses = set()
-
     transactions = get_token_transfers(token, chain)
     if not transactions:
-        return addresses
+        return {}
 
     for tx in config.tqdm(transactions, desc="Processing transactions"):
         from_addr = tx["from"].lower()
@@ -646,27 +655,22 @@ def get_unique_token_holders_API(token, chain, max_addresses=200, max_workers: i
             addresses.add(to_addr)
             if len(addresses) >= max_addresses:
                 break
-
+    
     debug_print(f"Number of holders (limited to {max_addresses}): {len(addresses)}\n")
 
-    if chain == 'bsc':
-        web3 = config.Web3(config.Web3.HTTPProvider(config.RPC_BSC))
-    elif chain == 'eth':
-        web3 = config.Web3(config.Web3.HTTPProvider(config.RPC_ETH))
-    
-    # abi = get_contract_info(token,chain)['abi']
+    # if chain == 'bsc':
+    #     web3 = config.Web3(config.Web3.HTTPProvider(config.RPC_BSC))
+    # elif chain == 'eth':
+    #     web3 = config.Web3(config.Web3.HTTPProvider(config.RPC_ETH))
     holders = {}
-    with config.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(get_token_balance_API, token,addr,chain): addr for addr in addresses}
-        for future in config.tqdm(config.as_completed(futures), total=len(futures)):
-            result = future.result()
-            if result:
-                addr, bal = result
-                holders[addr] = bal
+    for addr in config.tqdm(addresses, desc="Fetching balances"):
+        balance = get_token_balance_API(token, addr, chain)
+        if balance is not None and balance > 0:
+            holders[addr] = balance
+        config.time.sleep(0.7)
 
     print(f"✅ Found {len(holders)} holders with non-zero balances.")
     return holders
-
 
 def get_unique_token_holders_moralis(token, chain, max_pages=2, delay_seconds=1):
     params = {
@@ -687,8 +691,12 @@ def get_unique_token_holders_moralis(token, chain, max_pages=2, delay_seconds=1)
         try:
             response = config.evm_api.token.get_token_owners(api_key=config.MORALIS_API_KEY, params=params)
         except Exception as e:
+            error_message = str(e)
+            if "free-plan-daily total included usage has been consumed" in error_message:
+                print("API quota exceeded. Returning None.")
+                return None
             print(f"API request failed: {e}")
-            break
+            return None
 
         res = response.get("result", [])
         all_owners.extend(res)
@@ -708,13 +716,13 @@ def get_unique_token_holders_moralis(token, chain, max_pages=2, delay_seconds=1)
         entry['owner_address'].lower(): int(float(entry['balance']))
         for entry in all_owners
         if int(float(entry['balance'])) > 0
-    } or None
+    }
 
 
 def is_hardcoded_owner(token,chain,info):
     privileged_keywords = ["owner", "admin", "dev", "fee", "wallet"]
     pattern = r'address\s+(?:public|private|internal)?\s*([a-zA-Z0-9_]+)\s*=\s*(0x[a-fA-F0-9]{40})'
-    matches = config.re.findall(pattern, info)
+    matches = config.re.findall(pattern, info,config.re.IGNORECASE)
     flag = False
     for var_name, eth_address in matches:
         if any(keyword in var_name.lower() for keyword in privileged_keywords):
@@ -781,7 +789,7 @@ def owner_circulating_supply_analysis(token,chain,owner,total_c_supply,web3: con
 
     return owner_percentage,owner_flag
 
-def holder_circulating_supply_analysis(token,chain,holders,total_c_supply,web3: config.Web3, abi,owner,creator):
+def holder_circulating_supply_analysis(holders,total_c_supply):
     """
     returns
     Owner/creator wallet contains < 5% of circulating token supply
@@ -810,14 +818,12 @@ def holder_circulating_supply_analysis(token,chain,holders,total_c_supply,web3: 
     
     for holder, balance in holders.items():
         # if holder == owner or holder == creator: continue
-        age = get_holder_age(holder,chain)
         percentage = balance / total_c_supply * 100
         # Add individual holder details only if they exceed threshold
         if percentage > 5:
             flagged_holders.append({
                 'address': holder,
                 'balance': balance,
-                'age': age,
                 'percentage_of_supply': percentage
             })
 
@@ -832,7 +838,7 @@ def holder_circulating_supply_analysis(token,chain,holders,total_c_supply,web3: 
 
     return result
 
-def top10_analysis(token: str, chain: str, holders: dict, total_supply,total_circulating):
+def top10_analysis(holders: dict, total_supply,total_circulating):
     """
     Returns a dictionary with:
     - top_10 holders (address, balance, percentage of supply)
@@ -1656,7 +1662,7 @@ def analyze_token_contract_with_snippets(source_code: str, pbar=None) -> dict:
     progress_step = 1 / len(keyword_categories) if pbar else None
 
     for category, keywords in keyword_categories.items():
-        matching_funcs = [func for func in funcs if any(keyword in func for keyword in keywords)]
+        matching_funcs = [func for func in funcs if any(keyword.lower() in func.lower() for keyword in keywords)]
         findings[category] = {
             'found': bool(matching_funcs),
             'snippets': matching_funcs,
@@ -2055,7 +2061,7 @@ def run_security_checks(token, chain,source_code):
             print(f"Comment: {address['comment']}")
 
     # URL Blacklist Check
-    urls = config.re.findall(r'https?://[^\s"\'<>]+', source_code)
+    urls = config.re.findall(r'https?://[^\s"\'<>]+', source_code,config.re.IGNORECASE)
     for blacklisted in url_blacklist:
         for found_url in urls:
             if blacklisted["id"] == found_url:
@@ -2068,7 +2074,7 @@ def run_security_checks(token, chain,source_code):
     if token in scammers_blacklist["tokens"]:
         print("Token address matches a suspicious address in the database!: ", token)
 
-    found_addresses = config.re.findall(r'0x[a-fA-F0-9]{40}', source_code)
+    found_addresses = config.re.findall(r'0x[a-fA-F0-9]{40}', source_code,config.re.IGNORECASE)
     for address in found_addresses:
         if address in scammers_blacklist["tokens"]:
             print("Found a suspicious address in the source code match with the database: ", address)
@@ -2349,10 +2355,10 @@ def analyze_token(token_address: str, chain: str, analysis_types: list = None) -
         
         enriched_dict = {}
         for address, balance in holders.items():
-            age = get_holder_age(address,chain)  # You define this
+            # age = get_holder_age(address,chain)  # You define this
             enriched_dict[address] = {
                 "balance": balance,
-                "age": age
+                "age": None
             }
 
         results['analyses']['holders'] = {
