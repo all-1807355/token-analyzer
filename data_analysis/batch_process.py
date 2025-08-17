@@ -254,7 +254,7 @@ def process_all_json_files(base_path="."):
 # Usage
 if __name__ == "__main__":
     # Process all JSON files
-    master_dataframes = process_all_json_files("./test_data_analysis")
+    master_dataframes = process_all_json_files("../data")
     
     if master_dataframes:
         # Access individual dataframes

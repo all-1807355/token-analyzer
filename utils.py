@@ -588,6 +588,7 @@ def get_unique_token_holders_web3(token_address: str, chain: str, web3: config.W
         except Exception as e:
             print(f"⚠️ Failed to get logs from {start}-{end}: {e}")
             continue
+        config.time.sleep(1)
 
     print(f"🔍 Found {len(all_addresses)} unique addresses. Checking balances...")
 
@@ -620,7 +621,7 @@ def get_unique_token_holders_web3(token_address: str, chain: str, web3: config.W
     else:
         # Use on-chain balanceOf function
         with config.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(balance_of(addr).call): addr for addr in all_addresses}
+            futures = {executor.submit(balance_of(config.Web3.to_checksum_address(addr).lower()).call): addr for addr in all_addresses}
             for future in config.tqdm(config.as_completed(futures), total=len(futures)):
                 addr = futures[future]
                 try:
@@ -629,7 +630,7 @@ def get_unique_token_holders_web3(token_address: str, chain: str, web3: config.W
                         holders[addr] = balance
                 except Exception as e:
                     print(f"Error fetching balance for {addr}: {e}")
-                    return None
+                    return {}
 
     print(f"✅ Found {len(holders)} holders with non-zero balances.")
     return holders
@@ -1110,19 +1111,22 @@ def analyze_lp_security(token: str, chain: str = 'bsc') -> config.Dict:
     chain_id = chain_ids[chain]
 
     print(f"🔍 Fetching token security data for token: {token} on chain: {chain}")
-    
+
     # Fetch GoPlus data
     response = config.Token(access_token=None).token_security(chain_id=chain_id, addresses=[token])
     data = response.to_dict()  
     result = data.get("result", {})
     token_data = next(iter(result.values()), None)
+
     if not token_data:
         print("❌ Token data not found.")
         return {}
 
-    lp_holders = token_data.get("lp_holders", [])
-    lp_total_supply = float(token_data.get("lp_total_supply", 0))
-    
+    # Safe fallback values
+    lp_holders = token_data.get("lp_holders") or []
+    lp_total_supply_raw = token_data.get("lp_total_supply")
+    lp_total_supply = float(lp_total_supply_raw) if lp_total_supply_raw else 0
+
     # Calculate % of LP locked
     locked_amount = sum(
         float(holder.get("balance", 0)) for holder in lp_holders if holder.get("is_locked")
@@ -1132,21 +1136,26 @@ def analyze_lp_security(token: str, chain: str = 'bsc') -> config.Dict:
     # Check if ≥95% locked for ≥15 days
     now = config.datetime.now()
     long_term_locked = 0.0
+
     for holder in lp_holders:
-        if holder.get("locked_detail"):
-            for lock in holder["locked_detail"]:
-                try:
-                    end_time = config.datetime.fromisoformat(lock["end_time"].replace("Z", "+00:00"))
-                    if (end_time - now).days >= 15:
-                        long_term_locked += float(lock["amount"])
-                except Exception as e:
-                    print(f"⚠️ Failed parsing lock date: {e}")
+        for lock in holder.get("locked_detail", []):
+            end_time_str = lock.get("end_time")
+            if not end_time_str:
+                continue
+            try:
+                end_time = config.datetime.fromisoformat(end_time_str.replace("Z", "+00:00"))
+                if (end_time - now).days >= 15:
+                    long_term_locked += float(lock.get("amount", 0))
+            except Exception as e:
+                print(f"⚠️ Failed parsing lock date: {e}")
 
     locked_95_for_15d = (long_term_locked / lp_total_supply) * 100 >= 95 if lp_total_supply else False
-    # Creator info
+
+    # Creator / Owner info
     creator_percent_of_lp = float(token_data.get("creator_percent") or 0) * 100
     creator_under_5_percent = creator_percent_of_lp < 5
-    owner_percent_of_lp = float(token_data.get("owner_percent")or 0) * 100
+
+    owner_percent_of_lp = float(token_data.get("owner_percent") or 0) * 100
     owner_under_5_percent = owner_percent_of_lp < 5
 
     # Construct output
@@ -1162,9 +1171,9 @@ def analyze_lp_security(token: str, chain: str = 'bsc') -> config.Dict:
         "lp_holders_count": len(lp_holders),
         "lp_holders": [
             {
-                "address": holder["address"],
-                "balance": float(holder["balance"]),
-                "is_locked": bool(holder["is_locked"]),
+                "address": holder.get("address"),
+                "balance": float(holder.get("balance", 0)),
+                "is_locked": bool(holder.get("is_locked")),
                 "percent": float(holder.get("percent", 0)),
                 "tag": holder.get("tag", "")
             }
@@ -1796,48 +1805,51 @@ def get_quote_token_usd_price(token_address: str,chain: str, web3) -> float:
     return usd_reserve / token_reserve if token_reserve > 0 else 0
 
 def get_price_and_liquidity(pair_address: str, base_token_address: str, chain: str, web3, base_decimals=18, quote_decimals=18):
-    if chain not in ['bsc','eth']:
-        raise ValueError("Unsupported chain")
-    if chain == 'bsc':
-        url = config.BASE_URL_BSC
-    elif chain == 'eth':
-        url = config.BASE_URL_ETH
+    try:
+        if chain not in ['bsc', 'eth']:
+            raise ValueError("Unsupported chain")
+        if chain == 'bsc':
+            url = config.BASE_URL_BSC
+        elif chain == 'eth':
+            url = config.BASE_URL_ETH
 
-    #w3 = config.Web3(config.Web3.HTTPProvider(RPC_URL))
+        pair = web3.eth.contract(address=config.Web3.to_checksum_address(pair_address), abi=config.PAIR_ABI)
+        reserves = pair.functions.getReserves().call()
+        token0 = pair.functions.token0().call()
+        token1 = pair.functions.token1().call()
 
-    pair = web3.eth.contract(address=config.Web3.to_checksum_address(pair_address), abi=config.PAIR_ABI)
-    reserves = pair.functions.getReserves().call()
-    # print(reserves)
-    token0 = pair.functions.token0().call()
-    # print(f"the base token is token_address: {token0}")
-    token1 = pair.functions.token1().call()
-    # print(f"the quote token is quote_token: {token1}")
+        if token0.lower() == base_token_address.lower():
+            base_reserve = reserves[0] / (10 ** base_decimals)
+            quote_reserve = reserves[1] / (10 ** quote_decimals)
+            quote_token = token1
+        elif token1.lower() == base_token_address.lower():
+            base_reserve = reserves[1] / (10 ** base_decimals)
+            quote_reserve = reserves[0] / (10 ** quote_decimals)
+            quote_token = token0
+        else:
+            raise ValueError("Base token not in this pair")
 
-    if token0.lower() == base_token_address.lower():
-        base_reserve = reserves[0] / (10 ** base_decimals)
-        quote_reserve = reserves[1] / (10 ** quote_decimals)
-        quote_token = token1
-    elif token1.lower() == base_token_address.lower():
-        base_reserve = reserves[1] / (10 ** base_decimals)
-        quote_reserve = reserves[0] / (10 ** quote_decimals)
-        quote_token = token0
-    else:
-        raise ValueError("Base token not in this pair")
-    
-    # Automatically get USD price of quote token
-    quote_token_usd_price = get_quote_token_usd_price(quote_token,chain,web3)
-    # print(quote_token_usd_price)
-    # Compute base token USD price
-    price_usd = (quote_reserve / base_reserve) * quote_token_usd_price if base_reserve > 0 else 0
-    liquidity_usd = (base_reserve * price_usd) + (quote_reserve * quote_token_usd_price)
+        quote_token_usd_price = get_quote_token_usd_price(quote_token, chain, web3)
+        price_usd = (quote_reserve / base_reserve) * quote_token_usd_price if base_reserve > 0 else 0
+        liquidity_usd = (base_reserve * price_usd) + (quote_reserve * quote_token_usd_price)
 
-    return {
-        "price_usd": price_usd,
-        "liquidity_usd": liquidity_usd,
-        "base_token_reserve": base_reserve,
-        "quote_token_reserve": quote_reserve,
-        "quote_token_usd_price": quote_token_usd_price
-    }
+        return {
+            "price_usd": price_usd,
+            "liquidity_usd": liquidity_usd,
+            "base_token_reserve": base_reserve,
+            "quote_token_reserve": quote_reserve,
+            "quote_token_usd_price": quote_token_usd_price
+        }
+    except Exception:
+        # Silently catch any exception, return None-filled dict
+        return None
+        # return {
+        #     "price_usd": None,
+        #     "liquidity_usd": None,
+        #     "base_token_reserve": None,
+        #     "quote_token_reserve": None,
+        #     "quote_token_usd_price": None
+        # }
 
 def get_liquidity_to_marketcap_ratio(circulating_supply, price, liquidity, verbose=False):
     # Step 1: Get CoinGecko ID
@@ -1898,7 +1910,7 @@ def get_volume_to_liquidity_ratio(web3: config.Web3, pair_address: str, latest_b
         liquidity_usd (float): Total liquidity in USD, externally provided.
 
     Returns:
-        float: Volume-to-liquidity ratio.
+        dict: Contains token_volume, volume_usd, and vol_liq_ratio.
     """
     pair_address = web3.to_checksum_address(pair_address)
 
@@ -1906,14 +1918,28 @@ def get_volume_to_liquidity_ratio(web3: config.Web3, pair_address: str, latest_b
     blocks_per_day = 28800 if chain == "bsc" else 6500
     from_block = max(latest_block - blocks_per_day, 0)
 
-    # Fetch logs of Swap events
+    # Swap event signature hash
     swap_event_sig = "0x" + web3.keccak(text="Swap(address,uint256,uint256,uint256,uint256,address)").hex()
-    logs = web3.eth.get_logs({
-        "fromBlock": from_block,
-        "toBlock": latest_block,
-        "address": pair_address,
-        "topics": [swap_event_sig],
-    })
+
+    # Infura and others often limit log queries to ~1000-5000 blocks per request
+    MAX_BLOCK_RANGE = 1000  # adjust if needed based on provider limits
+
+    logs = []
+    current_from = from_block
+    while current_from <= latest_block:
+        current_to = min(current_from + MAX_BLOCK_RANGE - 1, latest_block)
+        try:
+            chunk_logs = web3.eth.get_logs({
+                "fromBlock": current_from,
+                "toBlock": current_to,
+                "address": pair_address,
+                "topics": [swap_event_sig],
+            })
+            logs.extend(chunk_logs)
+        except Exception as e:
+            print(f"Warning: Failed to fetch logs from {current_from} to {current_to}: {e}")
+            # Optional: implement retry or break
+        current_from = current_to + 1
 
     # Load LP contract and get token addresses
     pair_abi = [
@@ -1969,7 +1995,7 @@ def get_volume_to_liquidity_ratio(web3: config.Web3, pair_address: str, latest_b
     token_volume = total_token_volume / (10 ** decimals)
     volume_usd = token_volume * token_price_usd
 
-    print(f"token_volume,volume_usd: {token_volume} {volume_usd}")
+    print(f"token_volume, volume_usd: {token_volume} {volume_usd}")
     if liquidity_usd == 0:
         return {
             'token_volume': token_volume,

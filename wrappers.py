@@ -168,22 +168,23 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
     try:
         lp_address, pair_abi = utils.get_lp_pair(token_address,chain,web3)
         data = utils.get_dexscreener_price_liquidity_volume(token_address)
-        if not data:
-            dexscreenerok = False
-            data = utils.get_price_and_liquidity(lp_address,token_address,chain,web3)
-            price = data['price_usd']
-            liquidity = data['liquidity_usd']
-            if not data:
-                report_lines.append(f"⚠️ ERROR: no pair token data found!")
-                price, liquidity, volume = None, None, None
-        elif data:
+        price = None
+        liquidity = None
+        creation = None
+        if data:
+            price = data.get('price_usd')
+            liquidity = data.get('liquidity_usd')
             dexscreenerok = True
-            price, liquidity, volume = data
         else:
             dexscreenerok = False
-            report_lines.append(f"⚠️ ERROR: no pair token data found!")
-            price, liquidity, volume = None, None, None
-
+            data = utils.get_price_and_liquidity(lp_address, token_address, chain, web3)
+            if data:
+                price = data.get('price_usd')
+                liquidity = data.get('liquidity_usd')
+            else:
+                report_lines.append(f"⚠️ ERROR: no pair token data found!")
+                price = None
+                liquidity = None
         total_c_supply = results['analyses']['holder'].get('total_circulating_supply')
         if total_c_supply == None:
             coingecko_id = utils.get_coingecko_id_from_contract(token_address, chain)
@@ -208,36 +209,63 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
                     total_supply = utils.get_total_supply(token_address,chain)
                     total_c_supply = utils.get_circulating_supply_estimate(token_address,chain,total_supply,holders)
         
-        creation = utils.get_contract_creation_tx(lp_address,chain)
-        creation_timestamp = creation["timestamp"]
-        creation_blocknum = int(creation["blocknum"])
-        last_block = int(utils.get_latest_tx(lp_address,chain)['blockNumber'])
-
+        if creation == None:
+            creation = utils.get_contract_creation_tx(lp_address,chain)
+        if creation is not None:
+            creation_timestamp = creation["timestamp"]
+            creation_blocknum = int(creation["blocknum"])
+        else:
+            creation_timestamp = None
+            creation_blocknum = None
         liquidity_status = utils.analyze_lp_security(token_address,chain)
+        if not liquidity_status:
+            error_msg = "Liquidity pool info could not be retrieved."
+            results.setdefault('analyses', {}).setdefault('liquidity', {})['error'] = error_msg
+            report_lines.append(f"⚠️ Liquidity analysis error: {error_msg}\n")
+            if pbar:
+                pbar.update(5)
+            return results, report_lines
+            
         liquidity_holders = liquidity_status["lp_holders"]
+        last_block = utils.get_latest_tx(lp_address,chain)
+        if last_block != None:
+            last_block = int(last_block['blockNumber'])
+
         # WITHOUT API YOU WOULD USE THE ONE BELOW
         #TODO compute the time difference between the two. 
         # liquidity_holders = utils.get_lp_holders(lp_address, web3, pair_abi, creation_blocknum,last_block)
-        if not dexscreenerok:
+        if last_block and price and liquidity and not dexscreenerok:
             # print(web3,lp_address,last_block,chain,price,liquidity)
             fres = utils.get_volume_to_liquidity_ratio(web3,lp_address,last_block,chain,float(price),float(liquidity))
+            token_volume = fres['token_volume']
             vol_liq_ratio = fres['vol_liq_ratio']
             volume_24h = fres['volume_usd']
-        else:
-            price, liquidity, volume_24h = utils.get_dexscreener_price_liquidity_volume(token_address)
-            fres = utils.get_volume_to_liquidity_ratio(web3,lp_address,last_block,chain,price,liquidity)
+        elif last_block and price and liquidity and dexscreenerok:
+            fres = utils.get_volume_to_liquidity_ratio(web3,lp_address,last_block,chain,float(price),float(liquidity))
+            token_volume = fres['token_volume']
             vol_liq_ratio = fres['vol_liq_ratio']
             volume_24h = fres['volume_usd'] #TODO check docs
-
-        liq_market_ratio = utils.get_liquidity_to_marketcap_ratio(total_c_supply,price,liquidity)
+        else:
+            token_volume = None
+            vol_liq_ratio = None
+            volume_24h = None
         
+        if price and liquidity: 
+            liq_market_ratio = utils.get_liquidity_to_marketcap_ratio(total_c_supply,float(price),float(liquidity))
+            market_cap_usd = liq_market_ratio['market_cap_usd']
+            liquidity_to_market_cap_ratio = liq_market_ratio['liquidity_to_market_cap_ratio']
+        else: 
+            liq_market_ratio = None
+            liquidity_to_market_cap_ratio = None
+            market_cap_usd = None
 
 
         lp_contract = web3.eth.contract(address=config.Web3.to_checksum_address(lp_address), abi=pair_abi)
         if liquidity_status.get('total_lp_supply',None):
             total_lp_supply = liquidity_status['total_lp_supply']
         else:
-            total_lp_supply = lp_contract.functions.totalSupply().call()
+            total_lp_supply = utils.get_total_supply(lp_address, chain)
+
         # total_lp_supply = utils.get_total_supply(token_address,chain)
         owner = results["analyses"]["contract"].get("owner",utils.get_owner(token_address, chain))
         #owner_lp_balance = lp_address.functions.balanceOf(owner).call()
@@ -246,11 +274,11 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
         results['analyses']['liquidity'] = {
             'price_usd': price,
             'liquidity_usd': liquidity,
-            'market_cap_usd': liq_market_ratio['market_cap_usd'],
-            'liquidity_to_market_cap_ratio': liq_market_ratio['liquidity_to_market_cap_ratio'],
-            'token_volume': fres['token_volume'],
-            'volume_usd': fres['volume_usd'],
-            'volume_to_liquidity_ratio': fres['vol_liq_ratio'],
+            'market_cap_usd': market_cap_usd,
+            'liquidity_to_market_cap_ratio': liquidity_to_market_cap_ratio,
+            'token_volume': token_volume,
+            'volume_usd': volume_24h,
+            'volume_to_liquidity_ratio': vol_liq_ratio,
             "locked_liquidity_percent": liquidity_status['locked_liquidity_percent'],
             "locked_95_for_15_days": liquidity_status['locked_95_for_15_days'],
             "creator_under_5_percent": liquidity_status['creator_under_5_percent'],
@@ -280,12 +308,14 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
             report_lines.append(f"\r\n")
  
             report_lines.append(f"Liquidity holders for {token_address}, ({results["token_name"] if results["token_name"] else utils.get_token_name(token_address,chain)})\n")
+            # if total_lp_supply is None:
+            #     total_lp_supply = lp_contract.functions.totalSupply().call()
             for holder in liquidity_holders:
                 if holder["address"] == owner:
                     report_lines.append(f"\r\nOwner {holder["address"]} holds {holder["balance"]} LP tokens\r\n")
                     owner_lp_balance = holder["balance"]
                     #check if owner holds less than 5% of liquidity...
-                    if (owner_lp_balance / total_lp_supply) * 100 > 5:
+                    if total_lp_supply != None and (owner_lp_balance / total_lp_supply) * 100 > 5:
                         if owner == creator:
                             print(f"WARNING: Owner/Creator holds over 5% of the liquidity")
                             report_lines.append(f"WARNING: Owner/Creator holds over 5% of the liquidity")
@@ -295,7 +325,7 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
                     report_lines.append(f"\r\nCreator {holder["address"]} holds {holder["balance"]} LP tokens\r\n")
                     creator_lp_balance = holder["balance"]
                     #check if creator holds less than 5% of liquidity...
-                    if (creator_lp_balance / total_lp_supply) * 100 > 5:
+                    if total_lp_supply != None and (creator_lp_balance / total_lp_supply) * 100 > 5:
                         print(f"WARNING: Creator holds over 5% of the liquidity")
                         report_lines.append(f"WARNING: Creator holds over 5% of the liquidity")
                 else: report_lines.append(f"\r\n{holder["address"]} holds {holder["balance"]} LP tokens\r\n")
@@ -343,7 +373,7 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
     }
     report_lines.append("\nHolder Analysis\n--------------\n") 
     try:
-        abi = results['analyses']['contract'].get('abi')
+        abi = results['analyses']['contract'].get('abi',None)
         if abi == None:
             abi = utils.get_contract_info(token_address,chain).get('abi')
             if not abi:
@@ -356,7 +386,7 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
         if not holders_list:
             holders_list = utils.get_unique_token_holders_API(token_address,chain)
             if not holders_list:
-                if holders_list == set() and abi != None:
+                if not holders_list and abi != None:
                     creation = utils.get_contract_creation_tx(token_address, chain)
                     creation_block = int(creation["blocknum"]) if creation else None
                     last_tx = utils.get_latest_tx(token_address,chain)
@@ -367,14 +397,15 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
                         error_msg = "Failed to retrieve holders data."
                         # results.setdefault('analyses', {}).setdefault('holders', {})['error'] = error_msg
                         report_lines.append(f"⚠️ Holder analysis error: {error_msg}\n")
-
+        
         total_supply = utils.get_total_supply(token_address,chain)
         coingecko_id = utils.get_coingecko_id_from_contract(token_address, chain)
         if coingecko_id != None:
             total_c_supply = utils.get_circulating_supply(coingecko_id)
-        else:
-            #total_c_supply = total_supply #NOTE testing purposes only
+        elif holders_list:
             total_c_supply = utils.get_circulating_supply_estimate(token_address, chain, total_supply, holders_list)
+        else: 
+            total_c_supply = total_supply
 
         owner = results['analyses']['contract'].get('owner')
         creator = results['analyses']['contract'].get('creator')

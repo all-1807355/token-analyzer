@@ -12,6 +12,7 @@ from typing import Union, Dict
 from decimal import Decimal
 from web3 import Web3
 from datetime import datetime
+from datetime import timedelta
 from moralis import evm_api
 from eth_utils import keccak
 from urllib.parse import urlencode
@@ -37,7 +38,7 @@ class RateLimiter:
                 time.sleep(time_to_wait)
             self.calls.append(time.time())
 
-scan_rate_limiter = RateLimiter(max_calls=5, period=1.0)
+scan_rate_limiter = RateLimiter(max_calls=2, period=1.0)
 
 #pass smellytokens2025 or Smelly@tokens2025 (infura)
 ETHERSCAN_API_KEY = "YI5IUPU68CCB5AWVF8TP3T2BKY9FXW4QUH"
