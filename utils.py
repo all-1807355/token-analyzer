@@ -785,7 +785,8 @@ def get_total_supply(token,chain):
 def owner_circulating_supply_analysis(token,chain,owner,total_c_supply,web3: config.Web3,abi):
     debug_print(f"Owner/creator address: {owner}")
     owner_balance = get_token_balance_web3(owner, token, web3,abi)
-    owner_percentage = (owner_balance / total_c_supply) * 100
+    owner_percentage = (owner_balance / total_c_supply) * 100 if total_c_supply else 0.0
+
     owner_flag = owner_percentage > 5
 
     return owner_percentage,owner_flag
@@ -819,7 +820,7 @@ def holder_circulating_supply_analysis(holders,total_c_supply):
     
     for holder, balance in holders.items():
         # if holder == owner or holder == creator: continue
-        percentage = balance / total_c_supply * 100
+        percentage = balance / total_c_supply * 100 if total_c_supply else 0.0
         # Add individual holder details only if they exceed threshold
         if percentage > 5:
             flagged_holders.append({
@@ -1104,58 +1105,78 @@ def analyze_lp_security(token: str, chain: str = 'bsc') -> config.Dict:
         'arbitrum': 42161,
         'avax': 43114
     }
-
+    
     if chain not in chain_ids:
         raise ValueError(f"Unsupported chain: {chain}")
-    
+
     chain_id = chain_ids[chain]
 
     print(f"🔍 Fetching token security data for token: {token} on chain: {chain}")
 
     # Fetch GoPlus data
     response = config.Token(access_token=None).token_security(chain_id=chain_id, addresses=[token])
-    data = response.to_dict()  
-    result = data.get("result", {})
-    token_data = next(iter(result.values()), None)
+    data = response.to_dict()
 
-    if not token_data:
-        print("❌ Token data not found.")
+    # Safely extract token data
+    result = data.get("result")
+    if not isinstance(result, dict) or not result:
+        print("❌ 'result' is missing or invalid in API response.")
+        return {}
+
+    token_data = next(iter(result.values()), None)
+    if not isinstance(token_data, dict):
+        print("❌ Token data not found or is malformed.")
         return {}
 
     # Safe fallback values
     lp_holders = token_data.get("lp_holders") or []
     lp_total_supply_raw = token_data.get("lp_total_supply")
-    lp_total_supply = float(lp_total_supply_raw) if lp_total_supply_raw else 0
+    try:
+        lp_total_supply = float(lp_total_supply_raw) if lp_total_supply_raw else 0.0
+    except Exception as e:
+        print(f"⚠️ Failed to parse lp_total_supply: {e}")
+        lp_total_supply = 0.0
 
     # Calculate % of LP locked
-    locked_amount = sum(
-        float(holder.get("balance", 0)) for holder in lp_holders if holder.get("is_locked")
-    )
-    percent_locked = (locked_amount / lp_total_supply) * 100 if lp_total_supply else 0
+    locked_amount = 0.0
+    for holder in lp_holders:
+        try:
+            if holder.get("is_locked"):
+                locked_amount += float(holder.get("balance") or 0.0)
+        except Exception as e:
+            print(f"⚠️ Failed to parse holder balance: {e}")
+
+    percent_locked = (locked_amount / lp_total_supply) * 100 if lp_total_supply else 0.0
 
     # Check if ≥95% locked for ≥15 days
     now = config.datetime.now()
     long_term_locked = 0.0
 
     for holder in lp_holders:
-        for lock in holder.get("locked_detail", []):
+        for lock in holder.get("locked_detail") or []:
             end_time_str = lock.get("end_time")
             if not end_time_str:
                 continue
             try:
                 end_time = config.datetime.fromisoformat(end_time_str.replace("Z", "+00:00"))
                 if (end_time - now).days >= 15:
-                    long_term_locked += float(lock.get("amount", 0))
+                    long_term_locked += float(lock.get("amount") or 0.0)
             except Exception as e:
-                print(f"⚠️ Failed parsing lock date: {e}")
+                print(f"⚠️ Failed parsing lock detail: {e}")
 
     locked_95_for_15d = (long_term_locked / lp_total_supply) * 100 >= 95 if lp_total_supply else False
 
     # Creator / Owner info
-    creator_percent_of_lp = float(token_data.get("creator_percent") or 0) * 100
+    try:
+        creator_percent_of_lp = float(token_data.get("creator_percent") or 0.0) * 100
+    except Exception:
+        creator_percent_of_lp = 0.0
     creator_under_5_percent = creator_percent_of_lp < 5
 
-    owner_percent_of_lp = float(token_data.get("owner_percent") or 0) * 100
+    try:
+        owner_percent_of_lp = float(token_data.get("owner_percent") or 0.0) * 100
+    except Exception:
+        owner_percent_of_lp = 0.0
     owner_under_5_percent = owner_percent_of_lp < 5
 
     # Construct output
@@ -1172,10 +1193,10 @@ def analyze_lp_security(token: str, chain: str = 'bsc') -> config.Dict:
         "lp_holders": [
             {
                 "address": holder.get("address"),
-                "balance": float(holder.get("balance", 0)),
+                "balance": float(holder.get("balance") or 0.0),
                 "is_locked": bool(holder.get("is_locked")),
-                "percent": float(holder.get("percent", 0)),
-                "tag": holder.get("tag", "")
+                "percent": float(holder.get("percent") or 0.0),
+                "tag": holder.get("tag") or ""
             }
             for holder in lp_holders
         ]
@@ -1189,7 +1210,6 @@ def analyze_lp_security(token: str, chain: str = 'bsc') -> config.Dict:
     print(f"👥 LP Holders: {len(lp_holders)}")
 
     return liquidity_status
-
 
 def compute_locked_lp_percentage(lockers: dict, lp_address: str, web3: config.Web3, pair_abi: list) -> float:
     """
@@ -1926,21 +1946,31 @@ def get_volume_to_liquidity_ratio(web3: config.Web3, pair_address: str, latest_b
 
     logs = []
     current_from = from_block
+
+    MAX_RETRIES = 5
+    RETRY_DELAY = 2  # seconds
+
     while current_from <= latest_block:
         current_to = min(current_from + MAX_BLOCK_RANGE - 1, latest_block)
-        try:
-            chunk_logs = web3.eth.get_logs({
-                "fromBlock": current_from,
-                "toBlock": current_to,
-                "address": pair_address,
-                "topics": [swap_event_sig],
-            })
-            logs.extend(chunk_logs)
-        except Exception as e:
-            print(f"Warning: Failed to fetch logs from {current_from} to {current_to}: {e}")
-            # Optional: implement retry or break
+        for attempt in range(MAX_RETRIES):
+            try:
+                chunk_logs = web3.eth.get_logs({
+                    "fromBlock": current_from,
+                    "toBlock": current_to,
+                    "address": pair_address,
+                    "topics": [swap_event_sig],
+                })
+                logs.extend(chunk_logs)
+                break  # break retry loop on success
+            except Exception as e:
+                if "429" in str(e) and attempt < MAX_RETRIES - 1:
+                    print(f"Rate limit hit. Retrying after {RETRY_DELAY} seconds...")
+                    config.time.sleep(RETRY_DELAY * (attempt + 1))  # exponential backoff
+                else:
+                    print(f"Failed to fetch logs from {current_from} to {current_to}: {e}")
+                    break
         current_from = current_to + 1
-
+    
     # Load LP contract and get token addresses
     pair_abi = [
         {"name": "token0", "outputs": [{"type": "address"}], "inputs": [], "stateMutability": "view", "type": "function"},

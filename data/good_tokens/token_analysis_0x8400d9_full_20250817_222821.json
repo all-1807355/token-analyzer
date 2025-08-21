@@ -1,0 +1,691 @@
+{
+    "token_address": "0x8400d94a5cb0fa0d041a3788e395285d61c9ee5e",
+    "chain": "eth",
+    "token_name": "UniBright",
+    "analyses": {
+        "contract": {
+            "contract_name": "UniBrightToken",
+            "compiler_version": "v0.4.15+commit.bbb8e64f",
+            "license_type": "",
+            "implementation": "",
+            "source_code": "pragma solidity 0.4.15;\r\n\r\ncontract RegistryICAPInterface {\r\n    function parse(bytes32 _icap) constant returns(address, bytes32, bool);\r\n    function institutions(bytes32 _institution) constant returns(address);\r\n}\r\n\r\ncontract EToken2Interface {\r\n    function registryICAP() constant returns(RegistryICAPInterface);\r\n    function baseUnit(bytes32 _symbol) constant returns(uint8);\r\n    function description(bytes32 _symbol) constant returns(string);\r\n    function owner(bytes32 _symbol) constant returns(address);\r\n    function isOwner(address _owner, bytes32 _symbol) constant returns(bool);\r\n    function totalSupply(bytes32 _symbol) constant returns(uint);\r\n    function balanceOf(address _holder, bytes32 _symbol) constant returns(uint);\r\n    function isLocked(bytes32 _symbol) constant returns(bool);\r\n    function issueAsset(bytes32 _symbol, uint _value, string _name, string _description, uint8 _baseUnit, bool _isReissuable) returns(bool);\r\n    function reissueAsset(bytes32 _symbol, uint _value) returns(bool);\r\n    function revokeAsset(bytes32 _symbol, uint _value) returns(bool);\r\n    function setProxy(address _address, bytes32 _symbol) returns(bool);\r\n    function lockAsset(bytes32 _symbol) returns(bool);\r\n    function proxyTransferFromToICAPWithReference(address _from, bytes32 _icap, uint _value, string _reference, address _sender) returns(bool);\r\n    function proxyApprove(address _spender, uint _value, bytes32 _symbol, address _sender) returns(bool);\r\n    function allowance(address _from, address _spender, bytes32 _symbol) constant returns(uint);\r\n    function proxyTransferFromWithReference(address _from, address _to, uint _value, bytes32 _symbol, string _reference, address _sender) returns(bool);\r\n}\r\n\r\ncontract AssetInterface {\r\n    function _performTransferWithReference(address _to, uint _value, string _reference, address _sender) returns(bool);\r\n    function _performTransferToICAPWithReference(bytes32 _icap, uint _value, string _reference, address _sender) returns(bool);\r\n    function _performApprove(address _spender, uint _value, address _sender) returns(bool);    \r\n    function _performTransferFromWithReference(address _from, address _to, uint _value, string _reference, address _sender) returns(bool);\r\n    function _performTransferFromToICAPWithReference(address _from, bytes32 _icap, uint _value, string _reference, address _sender) returns(bool);\r\n    function _performGeneric(bytes, address) payable {\r\n        revert();\r\n    }\r\n}\r\n\r\ncontract ERC20Interface {\r\n    event Transfer(address indexed from, address indexed to, uint256 value);\r\n    event Approval(address indexed from, address indexed spender, uint256 value);\r\n\r\n    function totalSupply() constant returns(uint256 supply);\r\n    function balanceOf(address _owner) constant returns(uint256 balance);\r\n    function transfer(address _to, uint256 _value) returns(bool success);\r\n    function transferFrom(address _from, address _to, uint256 _value) returns(bool success);\r\n    function approve(address _spender, uint256 _value) returns(bool success);\r\n    function allowance(address _owner, address _spender) constant returns(uint256 remaining);\r\n\r\n    // function symbol() constant returns(string);\r\n    function decimals() constant returns(uint8);\r\n    // function name() constant returns(string);\r\n}\r\n\r\ncontract AssetProxyInterface {\r\n    function _forwardApprove(address _spender, uint _value, address _sender) returns(bool);\r\n    function _forwardTransferFromWithReference(address _from, address _to, uint _value, string _reference, address _sender) returns(bool);\r\n    function _forwardTransferFromToICAPWithReference(address _from, bytes32 _icap, uint _value, string _reference, address _sender) returns(bool);\r\n    function balanceOf(address _owner) constant returns(uint);\r\n}\r\n\r\ncontract Bytes32 {\r\n    function _bytes32(string _input) internal constant returns(bytes32 result) {\r\n        assembly {\r\n            result := mload(add(_input, 32))\r\n        }\r\n    }\r\n}\r\n\r\ncontract ReturnData {\r\n    function _returnReturnData(bool _success) internal {\r\n        assembly {\r\n            let returndatastart := msize()\r\n            mstore(0x40, add(returndatastart, returndatasize))\r\n            returndatacopy(returndatastart, 0, returndatasize)\r\n            switch _success case 0 { revert(returndatastart, returndatasize) } default { return(returndatastart, returndatasize) }\r\n        }\r\n    }\r\n\r\n    function _assemblyCall(address _destination, uint _value, bytes _data) internal returns(bool success) {\r\n        assembly {\r\n            success := call(div(mul(gas, 63), 64), _destination, _value, add(_data, 32), mload(_data), 0, 0)\r\n        }\r\n    }\r\n}\r\n\r\n/**\r\n * @title EToken2 Asset Proxy.\r\n *\r\n * Proxy implements ERC20 interface and acts as a gateway to a single EToken2 asset.\r\n * Proxy adds etoken2Symbol and caller(sender) when forwarding requests to EToken2.\r\n * Every request that is made by caller first sent to the specific asset implementation\r\n * contract, which then calls back to be forwarded onto EToken2.\r\n *\r\n * Calls flow: Caller ->\r\n *             Proxy.func(...) ->\r\n *             Asset._performFunc(..., Caller.address) ->\r\n *             Proxy._forwardFunc(..., Caller.address) ->\r\n *             Platform.proxyFunc(..., symbol, Caller.address)\r\n *\r\n * Generic call flow: Caller ->\r\n *             Proxy.unknownFunc(...) ->\r\n *             Asset._performGeneric(..., Caller.address) ->\r\n *             Asset.unknownFunc(...)\r\n *\r\n * Asset implementation contract is mutable, but each user have an option to stick with\r\n * old implementation, through explicit decision made in timely manner, if he doesn't agree\r\n * with new rules.\r\n * Each user have a possibility to upgrade to latest asset contract implementation, without the\r\n * possibility to rollback.\r\n *\r\n * Note: all the non constant functions return false instead of throwing in case if state change\r\n * didn't happen yet.\r\n */\r\ncontract AssetProxy is ERC20Interface, AssetProxyInterface, Bytes32, ReturnData {\r\n    // Assigned EToken2, immutable.\r\n    EToken2Interface public etoken2;\r\n\r\n    // Assigned symbol, immutable.\r\n    bytes32 public etoken2Symbol;\r\n\r\n    // Assigned name, immutable. For UI.\r\n    string public name;\r\n    string public symbol;\r\n\r\n    /**\r\n     * Sets EToken2 address, assigns symbol and name.\r\n     *\r\n     * Can be set only once.\r\n     *\r\n     * @param _etoken2 EToken2 contract address.\r\n     * @param _symbol assigned symbol.\r\n     * @param _name assigned name.\r\n     *\r\n     * @return success.\r\n     */\r\n    function init(EToken2Interface _etoken2, string _symbol, string _name) returns(bool) {\r\n        if (address(etoken2) != 0x0) {\r\n            return false;\r\n        }\r\n        etoken2 = _etoken2;\r\n        etoken2Symbol = _bytes32(_symbol);\r\n        name = _name;\r\n        symbol = _symbol;\r\n        return true;\r\n    }\r\n\r\n    /**\r\n     * Only EToken2 is allowed to call.\r\n     */\r\n    modifier onlyEToken2() {\r\n        if (msg.sender == address(etoken2)) {\r\n            _;\r\n        }\r\n    }\r\n\r\n    /**\r\n     * Only current asset owner is allowed to call.\r\n     */\r\n    modifier onlyAssetOwner() {\r\n        if (etoken2.isOwner(msg.sender, etoken2Symbol)) {\r\n            _;\r\n        }\r\n    }\r\n\r\n    /**\r\n     * Returns asset implementation contract for current caller.\r\n     *\r\n     * @return asset implementation contract.\r\n     */\r\n    function _getAsset() internal returns(AssetInterface) {\r\n        return AssetInterface(getVersionFor(msg.sender));\r\n    }\r\n\r\n    function recoverTokens(uint _value) onlyAssetOwner() returns(bool) {\r\n        return this.transferWithReference(msg.sender, _value, 'Tokens recovery');\r\n    }\r\n\r\n    /**\r\n     * Returns asset total supply.\r\n     *\r\n     * @return asset total supply.\r\n     */\r\n    function totalSupply() constant returns(uint) {\r\n        return etoken2.totalSupply(etoken2Symbol);\r\n    }\r\n\r\n    /**\r\n     * Returns asset balance for a particular holder.\r\n     *\r\n     * @param _owner holder address.\r\n     *\r\n     * @return holder balance.\r\n     */\r\n    function balanceOf(address _owner) constant returns(uint) {\r\n        return etoken2.balanceOf(_owner, etoken2Symbol);\r\n    }\r\n\r\n    /**\r\n     * Returns asset allowance from one holder to another.\r\n     *\r\n     * @param _from holder that allowed spending.\r\n     * @param _spender holder that is allowed to spend.\r\n     *\r\n     * @return holder to spender allowance.\r\n     */\r\n    function allowance(address _from, address _spender) constant returns(uint) {\r\n        return etoken2.allowance(_from, _spender, etoken2Symbol);\r\n    }\r\n\r\n    /**\r\n     * Returns asset decimals.\r\n     *\r\n     * @return asset decimals.\r\n     */\r\n    function decimals() constant returns(uint8) {\r\n        return etoken2.baseUnit(etoken2Symbol);\r\n    }\r\n\r\n    /**\r\n     * Transfers asset balance from the caller to specified receiver.\r\n     *\r\n     * @param _to holder address to give to.\r\n     * @param _value amount to transfer.\r\n     *\r\n     * @return success.\r\n     */\r\n    function transfer(address _to, uint _value) returns(bool) {\r\n        return transferWithReference(_to, _value, '');\r\n    }\r\n\r\n    /**\r\n     * Transfers asset balance from the caller to specified receiver adding specified comment.\r\n     * Resolves asset implementation contract for the caller and forwards there arguments along with\r\n     * the caller address.\r\n     *\r\n     * @param _to holder address to give to.\r\n     * @param _value amount to transfer.\r\n     * @param _reference transfer comment to be included in a EToken2's Transfer event.\r\n     *\r\n     * @return success.\r\n     */\r\n    function transferWithReference(address _to, uint _value, string _reference) returns(bool) {\r\n        return _getAsset()._performTransferWithReference(_to, _value, _reference, msg.sender);\r\n    }\r\n\r\n    /**\r\n     * Transfers asset balance from the caller to specified ICAP.\r\n     *\r\n     * @param _icap recipient ICAP to give to.\r\n     * @param _value amount to transfer.\r\n     *\r\n     * @return success.\r\n     */\r\n    function transferToICAP(bytes32 _icap, uint _value) returns(bool) {\r\n        return transferToICAPWithReference(_icap, _value, '');\r\n    }\r\n\r\n    /**\r\n     * Transfers asset balance from the caller to specified ICAP adding specified comment.\r\n     * Resolves asset implementation contract for the caller and forwards there arguments along with\r\n     * the caller address.\r\n     *\r\n     * @param _icap recipient ICAP to give to.\r\n     * @param _value amount to transfer.\r\n     * @param _reference transfer comment to be included in a EToken2's Transfer event.\r\n     *\r\n     * @return success.\r\n     */\r\n    function transferToICAPWithReference(bytes32 _icap, uint _value, string _reference) returns(bool) {\r\n        return _getAsset()._performTransferToICAPWithReference(_icap, _value, _reference, msg.sender);\r\n    }\r\n\r\n    /**\r\n     * Prforms allowance transfer of asset balance between holders.\r\n     *\r\n     * @param _from holder address to take from.\r\n     * @param _to holder address to give to.\r\n     * @param _value amount to transfer.\r\n     *\r\n     * @return success.\r\n     */\r\n    function transferFrom(address _from, address _to, uint _value) returns(bool) {\r\n        return transferFromWithReference(_from, _to, _value, '');\r\n    }\r\n\r\n    /**\r\n     * Prforms allowance transfer of asset balance between holders adding specified comment.\r\n     * Resolves asset implementation contract for the caller and forwards there arguments along with\r\n     * the caller address.\r\n     *\r\n     * @param _from holder address to take from.\r\n     * @param _to holder address to give to.\r\n     * @param _value amount to transfer.\r\n     * @param _reference transfer comment to be included in a EToken2's Transfer event.\r\n     *\r\n     * @return success.\r\n     */\r\n    function transferFromWithReference(address _from, address _to, uint _value, string _reference) returns(bool) {\r\n        return _getAsset()._performTransferFromWithReference(_from, _to, _value, _reference, msg.sender);\r\n    }\r\n\r\n    /**\r\n     * Performs transfer call on the EToken2 by the name of specified sender.\r\n     *\r\n     * Can only be called by asset implementation contract assigned to sender.\r\n     *\r\n     * @param _from holder address to take from.\r\n     * @param _to holder address to give to.\r\n     * @param _value amount to transfer.\r\n     * @param _reference transfer comment to be included in a EToken2's Transfer event.\r\n     * @param _sender initial caller.\r\n     *\r\n     * @return success.\r\n     */\r\n    function _forwardTransferFromWithReference(address _from, address _to, uint _value, string _reference, address _sender) onlyImplementationFor(_sender) returns(bool) {\r\n        return etoken2.proxyTransferFromWithReference(_from, _to, _value, etoken2Symbol, _reference, _sender);\r\n    }\r\n\r\n    /**\r\n     * Prforms allowance transfer of asset balance between holders.\r\n     *\r\n     * @param _from holder address to take from.\r\n     * @param _icap recipient ICAP address to give to.\r\n     * @param _value amount to transfer.\r\n     *\r\n     * @return success.\r\n     */\r\n    function transferFromToICAP(address _from, bytes32 _icap, uint _value) returns(bool) {\r\n        return transferFromToICAPWithReference(_from, _icap, _value, '');\r\n    }\r\n\r\n    /**\r\n     * Prforms allowance transfer of asset balance between holders adding specified comment.\r\n     * Resolves asset implementation contract for the caller and forwards there arguments along with\r\n     * the caller address.\r\n     *\r\n     * @param _from holder address to take from.\r\n     * @param _icap recipient ICAP address to give to.\r\n     * @param _value amount to transfer.\r\n     * @param _reference transfer comment to be included in a EToken2's Transfer event.\r\n     *\r\n     * @return success.\r\n     */\r\n    function transferFromToICAPWithReference(address _from, bytes32 _icap, uint _value, string _reference) returns(bool) {\r\n        return _getAsset()._performTransferFromToICAPWithReference(_from, _icap, _value, _reference, msg.sender);\r\n    }\r\n\r\n    /**\r\n     * Performs allowance transfer to ICAP call on the EToken2 by the name of specified sender.\r\n     *\r\n     * Can only be called by asset implementation contract assigned to sender.\r\n     *\r\n     * @param _from holder address to take from.\r\n     * @param _icap recipient ICAP address to give to.\r\n     * @param _value amount to transfer.\r\n     * @param _reference transfer comment to be included in a EToken2's Transfer event.\r\n     * @param _sender initial caller.\r\n     *\r\n     * @return success.\r\n     */\r\n    function _forwardTransferFromToICAPWithReference(address _from, bytes32 _icap, uint _value, string _reference, address _sender) onlyImplementationFor(_sender) returns(bool) {\r\n        return etoken2.proxyTransferFromToICAPWithReference(_from, _icap, _value, _reference, _sender);\r\n    }\r\n\r\n    /**\r\n     * Sets asset spending allowance for a specified spender.\r\n     * Resolves asset implementation contract for the caller and forwards there arguments along with\r\n     * the caller address.\r\n     *\r\n     * @param _spender holder address to set allowance to.\r\n     * @param _value amount to allow.\r\n     *\r\n     * @return success.\r\n     */\r\n    function approve(address _spender, uint _value) returns(bool) {\r\n        return _getAsset()._performApprove(_spender, _value, msg.sender);\r\n    }\r\n\r\n    /**\r\n     * Performs allowance setting call on the EToken2 by the name of specified sender.\r\n     *\r\n     * Can only be called by asset implementation contract assigned to sender.\r\n     *\r\n     * @param _spender holder address to set allowance to.\r\n     * @param _value amount to allow.\r\n     * @param _sender initial caller.\r\n     *\r\n     * @return success.\r\n     */\r\n    function _forwardApprove(address _spender, uint _value, address _sender) onlyImplementationFor(_sender) returns(bool) {\r\n        return etoken2.proxyApprove(_spender, _value, etoken2Symbol, _sender);\r\n    }\r\n\r\n    /**\r\n     * Emits ERC20 Transfer event on this contract.\r\n     *\r\n     * Can only be, and, called by assigned EToken2 when asset transfer happens.\r\n     */\r\n    function emitTransfer(address _from, address _to, uint _value) onlyEToken2() {\r\n        Transfer(_from, _to, _value);\r\n    }\r\n\r\n    /**\r\n     * Emits ERC20 Approval event on this contract.\r\n     *\r\n     * Can only be, and, called by assigned EToken2 when asset allowance set happens.\r\n     */\r\n    function emitApprove(address _from, address _spender, uint _value) onlyEToken2() {\r\n        Approval(_from, _spender, _value);\r\n    }\r\n\r\n    /**\r\n     * Resolves asset implementation contract for the caller and forwards there transaction data,\r\n     * along with the value. This allows for proxy interface growth.\r\n     */\r\n    function () payable {\r\n        _getAsset()._performGeneric.value(msg.value)(msg.data, msg.sender);\r\n        _returnReturnData(true);\r\n    }\r\n\r\n    // Interface functions to allow specifying ICAP addresses as strings.\r\n    function transferToICAP(string _icap, uint _value) returns(bool) {\r\n        return transferToICAPWithReference(_icap, _value, '');\r\n    }\r\n\r\n    function transferToICAPWithReference(string _icap, uint _value, string _reference) returns(bool) {\r\n        return transferToICAPWithReference(_bytes32(_icap), _value, _reference);\r\n    }\r\n\r\n    function transferFromToICAP(address _from, string _icap, uint _value) returns(bool) {\r\n        return transferFromToICAPWithReference(_from, _icap, _value, '');\r\n    }\r\n\r\n    function transferFromToICAPWithReference(address _from, string _icap, uint _value, string _reference) returns(bool) {\r\n        return transferFromToICAPWithReference(_from, _bytes32(_icap), _value, _reference);\r\n    }\r\n\r\n    /**\r\n     * Indicates an upgrade freeze-time start, and the next asset implementation contract.\r\n     */\r\n    event UpgradeProposal(address newVersion);\r\n\r\n    // Current asset implementation contract address.\r\n    address latestVersion;\r\n\r\n    // Proposed next asset implementation contract address.\r\n    address pendingVersion;\r\n\r\n    // Upgrade freeze-time start.\r\n    uint pendingVersionTimestamp;\r\n\r\n    // Timespan for users to review the new implementation and make decision.\r\n    uint constant UPGRADE_FREEZE_TIME = 3 days;\r\n\r\n    // Asset implementation contract address that user decided to stick with.\r\n    // 0x0 means that user uses latest version.\r\n    mapping(address => address) userOptOutVersion;\r\n\r\n    /**\r\n     * Only asset implementation contract assigned to sender is allowed to call.\r\n     */\r\n    modifier onlyImplementationFor(address _sender) {\r\n        if (getVersionFor(_sender) == msg.sender) {\r\n            _;\r\n        }\r\n    }\r\n\r\n    /**\r\n     * Returns asset implementation contract address assigned to sender.\r\n     *\r\n     * @param _sender sender address.\r\n     *\r\n     * @return asset implementation contract address.\r\n     */\r\n    function getVersionFor(address _sender) constant returns(address) {\r\n        return userOptOutVersion[_sender] == 0 ? latestVersion : userOptOutVersion[_sender];\r\n    }\r\n\r\n    /**\r\n     * Returns current asset implementation contract address.\r\n     *\r\n     * @return asset implementation contract address.\r\n     */\r\n    function getLatestVersion() constant returns(address) {\r\n        return latestVersion;\r\n    }\r\n\r\n    /**\r\n     * Returns proposed next asset implementation contract address.\r\n     *\r\n     * @return asset implementation contract address.\r\n     */\r\n    function getPendingVersion() constant returns(address) {\r\n        return pendingVersion;\r\n    }\r\n\r\n    /**\r\n     * Returns upgrade freeze-time start.\r\n     *\r\n     * @return freeze-time start.\r\n     */\r\n    function getPendingVersionTimestamp() constant returns(uint) {\r\n        return pendingVersionTimestamp;\r\n    }\r\n\r\n    /**\r\n     * Propose next asset implementation contract address.\r\n     *\r\n     * Can only be called by current asset owner.\r\n     *\r\n     * Note: freeze-time should not be applied for the initial setup.\r\n     *\r\n     * @param _newVersion asset implementation contract address.\r\n     *\r\n     * @return success.\r\n     */\r\n    function proposeUpgrade(address _newVersion) onlyAssetOwner() returns(bool) {\r\n        // Should not already be in the upgrading process.\r\n        if (pendingVersion != 0x0) {\r\n            return false;\r\n        }\r\n        // New version address should be other than 0x0.\r\n        if (_newVersion == 0x0) {\r\n            return false;\r\n        }\r\n        // Don't apply freeze-time for the initial setup.\r\n        if (latestVersion == 0x0) {\r\n            latestVersion = _newVersion;\r\n            return true;\r\n        }\r\n        pendingVersion = _newVersion;\r\n        pendingVersionTimestamp = now;\r\n        UpgradeProposal(_newVersion);\r\n        return true;\r\n    }\r\n\r\n    /**\r\n     * Cancel the pending upgrade process.\r\n     *\r\n     * Can only be called by current asset owner.\r\n     *\r\n     * @return success.\r\n     */\r\n    function purgeUpgrade() onlyAssetOwner() returns(bool) {\r\n        if (pendingVersion == 0x0) {\r\n            return false;\r\n        }\r\n        delete pendingVersion;\r\n        delete pendingVersionTimestamp;\r\n        return true;\r\n    }\r\n\r\n    /**\r\n     * Finalize an upgrade process setting new asset implementation contract address.\r\n     *\r\n     * Can only be called after an upgrade freeze-time.\r\n     *\r\n     * @return success.\r\n     */\r\n    function commitUpgrade() returns(bool) {\r\n        if (pendingVersion == 0x0) {\r\n            return false;\r\n        }\r\n        if (pendingVersionTimestamp + UPGRADE_FREEZE_TIME > now) {\r\n            return false;\r\n        }\r\n        latestVersion = pendingVersion;\r\n        delete pendingVersion;\r\n        delete pendingVersionTimestamp;\r\n        return true;\r\n    }\r\n\r\n    /**\r\n     * Disagree with proposed upgrade, and stick with current asset implementation\r\n     * until further explicit agreement to upgrade.\r\n     *\r\n     * @return success.\r\n     */\r\n    function optOut() returns(bool) {\r\n        if (userOptOutVersion[msg.sender] != 0x0) {\r\n            return false;\r\n        }\r\n        userOptOutVersion[msg.sender] = latestVersion;\r\n        return true;\r\n    }\r\n\r\n    /**\r\n     * Implicitly agree to upgrade to current and future asset implementation upgrades,\r\n     * until further explicit disagreement.\r\n     *\r\n     * @return success.\r\n     */\r\n    function optIn() returns(bool) {\r\n        delete userOptOutVersion[msg.sender];\r\n        return true;\r\n    }\r\n\r\n    // Backwards compatibility.\r\n    function multiAsset() constant returns(EToken2Interface) {\r\n        return etoken2;\r\n    }\r\n}\r\n\r\ncontract UniBrightToken is AssetProxy {\r\n    function change(string _symbol, string _name) onlyAssetOwner() returns(bool) {\r\n        if (etoken2.isLocked(etoken2Symbol)) {\r\n            return false;\r\n        }\r\n        name = _name;\r\n        symbol = _symbol;\r\n        return true;\r\n    }\r\n}",
+            "abi": "[{\"constant\":true,\"inputs\":[],\"name\":\"multiAsset\",\"outputs\":[{\"name\":\"\",\"type\":\"address\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"name\",\"outputs\":[{\"name\":\"\",\"type\":\"string\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_spender\",\"type\":\"address\"},{\"name\":\"_value\",\"type\":\"uint256\"}],\"name\":\"approve\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[],\"name\":\"commitUpgrade\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"getLatestVersion\",\"outputs\":[{\"name\":\"\",\"type\":\"address\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_from\",\"type\":\"address\"},{\"name\":\"_to\",\"type\":\"address\"},{\"name\":\"_value\",\"type\":\"uint256\"},{\"name\":\"_reference\",\"type\":\"string\"},{\"name\":\"_sender\",\"type\":\"address\"}],\"name\":\"_forwardTransferFromWithReference\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"totalSupply\",\"outputs\":[{\"name\":\"\",\"type\":\"uint256\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_from\",\"type\":\"address\"},{\"name\":\"_spender\",\"type\":\"address\"},{\"name\":\"_value\",\"type\":\"uint256\"}],\"name\":\"emitApprove\",\"outputs\":[],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_from\",\"type\":\"address\"},{\"name\":\"_to\",\"type\":\"address\"},{\"name\":\"_value\",\"type\":\"uint256\"}],\"name\":\"transferFrom\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_from\",\"type\":\"address\"},{\"name\":\"_to\",\"type\":\"address\"},{\"name\":\"_value\",\"type\":\"uint256\"}],\"name\":\"emitTransfer\",\"outputs\":[],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_value\",\"type\":\"uint256\"}],\"name\":\"recoverTokens\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"decimals\",\"outputs\":[{\"name\":\"\",\"type\":\"uint8\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"etoken2\",\"outputs\":[{\"name\":\"\",\"type\":\"address\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"getPendingVersionTimestamp\",\"outputs\":[{\"name\":\"\",\"type\":\"uint256\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[],\"name\":\"purgeUpgrade\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[],\"name\":\"optIn\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_from\",\"type\":\"address\"},{\"name\":\"_to\",\"type\":\"address\"},{\"name\":\"_value\",\"type\":\"uint256\"},{\"name\":\"_reference\",\"type\":\"string\"}],\"name\":\"transferFromWithReference\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[{\"name\":\"_owner\",\"type\":\"address\"}],\"name\":\"balanceOf\",\"outputs\":[{\"name\":\"\",\"type\":\"uint256\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_icap\",\"type\":\"bytes32\"},{\"name\":\"_value\",\"type\":\"uint256\"}],\"name\":\"transferToICAP\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_from\",\"type\":\"address\"},{\"name\":\"_icap\",\"type\":\"string\"},{\"name\":\"_value\",\"type\":\"uint256\"}],\"name\":\"transferFromToICAP\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_icap\",\"type\":\"bytes32\"},{\"name\":\"_value\",\"type\":\"uint256\"},{\"name\":\"_reference\",\"type\":\"string\"}],\"name\":\"transferToICAPWithReference\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_spender\",\"type\":\"address\"},{\"name\":\"_value\",\"type\":\"uint256\"},{\"name\":\"_sender\",\"type\":\"address\"}],\"name\":\"_forwardApprove\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_icap\",\"type\":\"string\"},{\"name\":\"_value\",\"type\":\"uint256\"}],\"name\":\"transferToICAP\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_symbol\",\"type\":\"string\"},{\"name\":\"_name\",\"type\":\"string\"}],\"name\":\"change\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_from\",\"type\":\"address\"},{\"name\":\"_icap\",\"type\":\"string\"},{\"name\":\"_value\",\"type\":\"uint256\"},{\"name\":\"_reference\",\"type\":\"string\"}],\"name\":\"transferFromToICAPWithReference\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"symbol\",\"outputs\":[{\"name\":\"\",\"type\":\"string\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_icap\",\"type\":\"string\"},{\"name\":\"_value\",\"type\":\"uint256\"},{\"name\":\"_reference\",\"type\":\"string\"}],\"name\":\"transferToICAPWithReference\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_from\",\"type\":\"address\"},{\"name\":\"_icap\",\"type\":\"bytes32\"},{\"name\":\"_value\",\"type\":\"uint256\"},{\"name\":\"_reference\",\"type\":\"string\"},{\"name\":\"_sender\",\"type\":\"address\"}],\"name\":\"_forwardTransferFromToICAPWithReference\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_from\",\"type\":\"address\"},{\"name\":\"_icap\",\"type\":\"bytes32\"},{\"name\":\"_value\",\"type\":\"uint256\"},{\"name\":\"_reference\",\"type\":\"string\"}],\"name\":\"transferFromToICAPWithReference\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_from\",\"type\":\"address\"},{\"name\":\"_icap\",\"type\":\"bytes32\"},{\"name\":\"_value\",\"type\":\"uint256\"}],\"name\":\"transferFromToICAP\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"etoken2Symbol\",\"outputs\":[{\"name\":\"\",\"type\":\"bytes32\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"getPendingVersion\",\"outputs\":[{\"name\":\"\",\"type\":\"address\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_to\",\"type\":\"address\"},{\"name\":\"_value\",\"type\":\"uint256\"}],\"name\":\"transfer\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_to\",\"type\":\"address\"},{\"name\":\"_value\",\"type\":\"uint256\"},{\"name\":\"_reference\",\"type\":\"string\"}],\"name\":\"transferWithReference\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_etoken2\",\"type\":\"address\"},{\"name\":\"_symbol\",\"type\":\"string\"},{\"name\":\"_name\",\"type\":\"string\"}],\"name\":\"init\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_newVersion\",\"type\":\"address\"}],\"name\":\"proposeUpgrade\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[],\"name\":\"optOut\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[{\"name\":\"_from\",\"type\":\"address\"},{\"name\":\"_spender\",\"type\":\"address\"}],\"name\":\"allowance\",\"outputs\":[{\"name\":\"\",\"type\":\"uint256\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[{\"name\":\"_sender\",\"type\":\"address\"}],\"name\":\"getVersionFor\",\"outputs\":[{\"name\":\"\",\"type\":\"address\"}],\"payable\":false,\"type\":\"function\"},{\"payable\":true,\"type\":\"fallback\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"name\":\"newVersion\",\"type\":\"address\"}],\"name\":\"UpgradeProposal\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"name\":\"from\",\"type\":\"address\"},{\"indexed\":true,\"name\":\"to\",\"type\":\"address\"},{\"indexed\":false,\"name\":\"value\",\"type\":\"uint256\"}],\"name\":\"Transfer\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"name\":\"from\",\"type\":\"address\"},{\"indexed\":true,\"name\":\"spender\",\"type\":\"address\"},{\"indexed\":false,\"name\":\"value\",\"type\":\"uint256\"}],\"name\":\"Approval\",\"type\":\"event\"}]",
+            "verified": true,
+            "owner": null,
+            "creator": "0x1ff21eca1c3ba96ed53783ab9c92ffbf77862584",
+            "is_hidden_owner": true,
+            "is_proxy": false,
+            "is_sellable": true,
+            "is_hardcoded_owner": false,
+            "code_analysis": {
+                "mint_function_detected": {
+                    "found": false,
+                    "snippets": [],
+                    "snippets_number": 0
+                },
+                "ownership_renounced": {
+                    "found": false,
+                    "snippets": [],
+                    "snippets_number": 0
+                },
+                "is_honeypot_suspected": {
+                    "found": false,
+                    "snippets": [],
+                    "snippets_number": 0
+                },
+                "delayed_trading_detected": {
+                    "found": false,
+                    "snippets": [],
+                    "snippets_number": 0
+                },
+                "transfer_cooldown_detected": {
+                    "found": false,
+                    "snippets": [],
+                    "snippets_number": 0
+                },
+                "high_tax_detected": {
+                    "found": false,
+                    "snippets": [],
+                    "snippets_number": 0
+                },
+                "blacklist_or_whitelist_detected": {
+                    "found": false,
+                    "snippets": [],
+                    "snippets_number": 0
+                },
+                "trading_disabled_possible": {
+                    "found": false,
+                    "snippets": [],
+                    "snippets_number": 0
+                },
+                "other_suspicious_detected": {
+                    "found": false,
+                    "snippets": [],
+                    "snippets_number": 0
+                }
+            }
+        },
+        "holder": {
+            "total_holders": 58,
+            "holders_list": {
+                "0xd2dd4f3beab3fd03971d5b4cb33319bd100c421a": {
+                    "balance": 31673994867606,
+                    "percentage_of_total_supply": 0.21115996578403998,
+                    "percentage_of_circulating_supply": 21115996.578404
+                },
+                "0xb1e65a52d95b392ef94cf46833afc61a04593f93": {
+                    "balance": 1,
+                    "percentage_of_total_supply": 6.666666666666667e-15,
+                    "percentage_of_circulating_supply": 6.666666666666667e-07
+                },
+                "0x027e25a80e097c6aa63dde55041510bbb6e1d50a": {
+                    "balance": 83749990,
+                    "percentage_of_total_supply": 5.583332666666667e-07,
+                    "percentage_of_circulating_supply": 55.83332666666667
+                },
+                "0xb3ce8f6aae14d3b1c21f5bb499ba87f7e67e3d4a": {
+                    "balance": 497241428571,
+                    "percentage_of_total_supply": 0.00331494285714,
+                    "percentage_of_circulating_supply": 331494.285714
+                },
+                "0x15b520a28ca89dbef6166a203bb0ae1769b4fb4a": {
+                    "balance": 21,
+                    "percentage_of_total_supply": 1.4e-13,
+                    "percentage_of_circulating_supply": 1.4000000000000001e-05
+                },
+                "0xff8afb818b9190e304a4ae1964c58a15ee28f014": {
+                    "balance": 1971435533153,
+                    "percentage_of_total_supply": 0.013142903554353333,
+                    "percentage_of_circulating_supply": 1314290.3554353334
+                },
+                "0xe0962153560430184b4e658136a253532480aa73": {
+                    "balance": 309740006086,
+                    "percentage_of_total_supply": 0.0020649333739066666,
+                    "percentage_of_circulating_supply": 206493.33739066665
+                },
+                "0x45dacf233a665349b1af9c118c250e2907428ae0": {
+                    "balance": 865272248,
+                    "percentage_of_total_supply": 5.768481653333333e-06,
+                    "percentage_of_circulating_supply": 576.8481653333333
+                },
+                "0x9d313648ce66972349a4f7467b5d5f69035c0e38": {
+                    "balance": 729864273,
+                    "percentage_of_total_supply": 4.86576182e-06,
+                    "percentage_of_circulating_supply": 486.576182
+                },
+                "0x784ee9001a8d6c0a34f26ad358ac60a93b2a0bda": {
+                    "balance": 8600,
+                    "percentage_of_total_supply": 5.7333333333333336e-11,
+                    "percentage_of_circulating_supply": 0.005733333333333333
+                },
+                "0xba48a8b29716203b61e7dfca35154f5a52b09fdd": {
+                    "balance": 26924314,
+                    "percentage_of_total_supply": 1.7949542666666667e-07,
+                    "percentage_of_circulating_supply": 17.94954266666667
+                },
+                "0x1552f3cf0388db3f1de79101f533972636d51c98": {
+                    "balance": 7622159,
+                    "percentage_of_total_supply": 5.0814393333333336e-08,
+                    "percentage_of_circulating_supply": 5.081439333333333
+                },
+                "0xca0a488fbb69105cbf424bd9397bfbf4530c40aa": {
+                    "balance": 476523084971,
+                    "percentage_of_total_supply": 0.0031768205664733334,
+                    "percentage_of_circulating_supply": 317682.0566473333
+                },
+                "0x54668289abe3a2d259c11ac9d86c0969ffc29ccc": {
+                    "balance": 100000000,
+                    "percentage_of_total_supply": 6.666666666666667e-07,
+                    "percentage_of_circulating_supply": 66.66666666666666
+                },
+                "0x15579f74c1b93b573c0a4d865011ec68f909fd02": {
+                    "balance": 300000000000,
+                    "percentage_of_total_supply": 0.002,
+                    "percentage_of_circulating_supply": 200000.0
+                },
+                "0xc6bf8d5dd89db44ba6dd29f70b2b69d4f0dced69": {
+                    "balance": 72183346528,
+                    "percentage_of_total_supply": 0.0004812223101866666,
+                    "percentage_of_circulating_supply": 48122.231018666665
+                },
+                "0x390c04619b49e2e1bdb61fa31b466ea1877d3192": {
+                    "balance": 238261501472,
+                    "percentage_of_total_supply": 0.0015884100098133333,
+                    "percentage_of_circulating_supply": 158841.00098133335
+                },
+                "0x37d3e0b0fd9672e6ad9158158659e3777f917ae2": {
+                    "balance": 29,
+                    "percentage_of_total_supply": 1.9333333333333333e-13,
+                    "percentage_of_circulating_supply": 1.9333333333333333e-05
+                },
+                "0x10f6bc7738dd647b969a7f14d6e9544a1bbd19d9": {
+                    "balance": 2842,
+                    "percentage_of_total_supply": 1.8946666666666665e-11,
+                    "percentage_of_circulating_supply": 0.0018946666666666667
+                },
+                "0xb231a25ade405f24cfe03aab7edea9732673535a": {
+                    "balance": 68585,
+                    "percentage_of_total_supply": 4.572333333333333e-10,
+                    "percentage_of_circulating_supply": 0.04572333333333334
+                },
+                "0x039c9714aa51aa0ba3de50dc9bb860652a51888a": {
+                    "balance": 75650665,
+                    "percentage_of_total_supply": 5.043377666666667e-07,
+                    "percentage_of_circulating_supply": 50.43377666666666
+                },
+                "0xe5c839c31aa331e760917e9158f7a58c64779465": {
+                    "balance": 106937157,
+                    "percentage_of_total_supply": 7.129143800000001e-07,
+                    "percentage_of_circulating_supply": 71.291438
+                },
+                "0x8d6ad019bd75bd65ae5db1fb72f35e9d9f4da99c": {
+                    "balance": 238261517857,
+                    "percentage_of_total_supply": 0.0015884101190466666,
+                    "percentage_of_circulating_supply": 158841.01190466667
+                },
+                "0xe6b38f99d9a582f788e4d75ff4fba090f6d9caa9": {
+                    "balance": 4326788903,
+                    "percentage_of_total_supply": 2.8845259353333334e-05,
+                    "percentage_of_circulating_supply": 2884.525935333333
+                },
+                "0xfd20aef93a486f900d1ff90648c3e41153bfd5a0": {
+                    "balance": 7485677,
+                    "percentage_of_total_supply": 4.990451333333333e-08,
+                    "percentage_of_circulating_supply": 4.990451333333333
+                },
+                "0xae8bfc911f14e0c3d082df48e3d37120add45782": {
+                    "balance": 47675997403,
+                    "percentage_of_total_supply": 0.0003178399826866667,
+                    "percentage_of_circulating_supply": 31783.998268666663
+                },
+                "0xbf64aa0298befc8e53ca2604b67d85002c919ca0": {
+                    "balance": 57182765915,
+                    "percentage_of_total_supply": 0.0003812184394333333,
+                    "percentage_of_circulating_supply": 38121.84394333333
+                },
+                "0x188db4ef685d89356ee12645c1540fcd4e837aec": {
+                    "balance": 5243062500000,
+                    "percentage_of_total_supply": 0.03495375,
+                    "percentage_of_circulating_supply": 3495375.0
+                },
+                "0xdd01e3def66bd0e69d0ea56f102766dee68540af": {
+                    "balance": 269369,
+                    "percentage_of_total_supply": 1.7957933333333334e-09,
+                    "percentage_of_circulating_supply": 0.17957933333333334
+                },
+                "0x547102908fa2f609fa4426548abad1d4595fbf9a": {
+                    "balance": 28587,
+                    "percentage_of_total_supply": 1.9057999999999998e-10,
+                    "percentage_of_circulating_supply": 0.019058000000000002
+                },
+                "0xeb30c14eb1c07adf16de454afee174dc1544e14a": {
+                    "balance": 1000000000000,
+                    "percentage_of_total_supply": 0.006666666666666667,
+                    "percentage_of_circulating_supply": 666666.6666666667
+                },
+                "0x33a8972049abf7caaa2d1886c0547fdfcbd86be3": {
+                    "balance": 1734,
+                    "percentage_of_total_supply": 1.156e-11,
+                    "percentage_of_circulating_supply": 0.001156
+                },
+                "0xc02c800a436ab7fa622f2284df0a36f3a18e073f": {
+                    "balance": 13810724,
+                    "percentage_of_total_supply": 9.207149333333333e-08,
+                    "percentage_of_circulating_supply": 9.207149333333334
+                },
+                "0xc867efcbc2349a5b9ec8282208a16bb1b8a3b98c": {
+                    "balance": 2486206971407,
+                    "percentage_of_total_supply": 0.016574713142713332,
+                    "percentage_of_circulating_supply": 1657471.3142713332
+                },
+                "0x66d55504acda4696f827d7a5d1784c8cddec9381": {
+                    "balance": 476523084971,
+                    "percentage_of_total_supply": 0.0031768205664733334,
+                    "percentage_of_circulating_supply": 317682.0566473333
+                },
+                "0x654498bb54f9679879a35f358425c950fe136a76": {
+                    "balance": 87428586,
+                    "percentage_of_total_supply": 5.8285724e-07,
+                    "percentage_of_circulating_supply": 58.285724
+                },
+                "0xc9810c61a4b65deeaed95fc24e2ce433d14b6f71": {
+                    "balance": 23068585,
+                    "percentage_of_total_supply": 1.5379056666666667e-07,
+                    "percentage_of_circulating_supply": 15.379056666666665
+                },
+                "0x698b1bbea96af3851859d0e7b166167998c122db": {
+                    "balance": 929219903257,
+                    "percentage_of_total_supply": 0.0061947993550466665,
+                    "percentage_of_circulating_supply": 619479.9355046666
+                },
+                "0x4d80b6f36a7d7677a8664e7b3237d16d788cf04a": {
+                    "balance": 667132250001,
+                    "percentage_of_total_supply": 0.00444754833334,
+                    "percentage_of_circulating_supply": 444754.83333399997
+                },
+                "0x3d4a8bedef712e35c86d5f558a38505c36ae5b7d": {
+                    "balance": 497241394300,
+                    "percentage_of_total_supply": 0.003314942628666667,
+                    "percentage_of_circulating_supply": 331494.26286666666
+                },
+                "0x33e6e238d2891194f7d2cc755665823748b5a684": {
+                    "balance": 34597197,
+                    "percentage_of_total_supply": 2.3064798e-07,
+                    "percentage_of_circulating_supply": 23.064798
+                },
+                "0x191d0a5d134f5ba9dab346444a62d3a1baaeecb1": {
+                    "balance": 79447823630,
+                    "percentage_of_total_supply": 0.0005296521575333333,
+                    "percentage_of_circulating_supply": 52965.21575333334
+                },
+                "0xf2079431b257869cc9efe577fab91f9f7f7e6c9a": {
+                    "balance": 714684586442,
+                    "percentage_of_total_supply": 0.004764563909613333,
+                    "percentage_of_circulating_supply": 476456.39096133335
+                },
+                "0x8e9a3c491465dd5bfac73181635666b01637bc0b": {
+                    "balance": 51769530,
+                    "percentage_of_total_supply": 3.451302e-07,
+                    "percentage_of_circulating_supply": 34.51302
+                },
+                "0x1d3520c1e8b05d8fa96fbf6c26014f6831f94e5b": {
+                    "balance": 35714,
+                    "percentage_of_total_supply": 2.3809333333333335e-10,
+                    "percentage_of_circulating_supply": 0.02380933333333333
+                },
+                "0xaf5b58347fef6775251fa5eb566f8aea8f7b5ea8": {
+                    "balance": 2859638442315,
+                    "percentage_of_total_supply": 0.019064256282099998,
+                    "percentage_of_circulating_supply": 1906425.62821
+                },
+                "0x0094b888ed5462e6ee19edc0a20d17330a08537e": {
+                    "balance": 4608772,
+                    "percentage_of_total_supply": 3.072514666666667e-08,
+                    "percentage_of_circulating_supply": 3.0725146666666667
+                },
+                "0xeba95561e0078295cab2635a960650625ebc0ea5": {
+                    "balance": 15671441,
+                    "percentage_of_total_supply": 1.0447627333333334e-07,
+                    "percentage_of_circulating_supply": 10.447627333333333
+                },
+                "0xa308211f76c758e44aea38bc98b652536874cf42": {
+                    "balance": 14285714,
+                    "percentage_of_total_supply": 9.523809333333333e-08,
+                    "percentage_of_circulating_supply": 9.523809333333332
+                },
+                "0x400022ec0175c5053edcef88340159e34b18cc5d": {
+                    "balance": 3248614,
+                    "percentage_of_total_supply": 2.1657426666666665e-08,
+                    "percentage_of_circulating_supply": 2.1657426666666666
+                },
+                "0xf45a4cebdb3feb56af7d1f0497fbb5dc3560e1d4": {
+                    "balance": 61481729,
+                    "percentage_of_total_supply": 4.098781933333333e-07,
+                    "percentage_of_circulating_supply": 40.987819333333334
+                },
+                "0x45029ffd171446e1ffe77d9186e0792b21f0cada": {
+                    "balance": 2044826021,
+                    "percentage_of_total_supply": 1.3632173473333335e-05,
+                    "percentage_of_circulating_supply": 1363.2173473333332
+                },
+                "0xaade74503d75c857eddb1b464915b9fa546ac859": {
+                    "balance": 95304608772,
+                    "percentage_of_total_supply": 0.0006353640584800001,
+                    "percentage_of_circulating_supply": 63536.405848
+                },
+                "0xe8a5bb8d25ddc36c20446a14c9f93b778858b320": {
+                    "balance": 4900000000,
+                    "percentage_of_total_supply": 3.266666666666667e-05,
+                    "percentage_of_circulating_supply": 3266.6666666666665
+                },
+                "0x9318311eab124c8e701da15f30e065b685e1389a": {
+                    "balance": 23002843,
+                    "percentage_of_total_supply": 1.5335228666666667e-07,
+                    "percentage_of_circulating_supply": 15.335228666666668
+                },
+                "0x05de1c6a804e586e4a074e0fbcb33396e936d011": {
+                    "balance": 55,
+                    "percentage_of_total_supply": 3.6666666666666665e-13,
+                    "percentage_of_circulating_supply": 3.6666666666666666e-05
+                },
+                "0x53e4e81d4061e7366fa3f6d93c4d4a0e7ff3fba9": {
+                    "balance": 28533,
+                    "percentage_of_total_supply": 1.9022000000000002e-10,
+                    "percentage_of_circulating_supply": 0.019022
+                },
+                "0x79ed19b719e6f86aa5dd136e412cf5d344a31c02": {
+                    "balance": 497241445757,
+                    "percentage_of_total_supply": 0.0033149429717133335,
+                    "percentage_of_circulating_supply": 331494.29717133334
+                }
+            },
+            "total_supply": 15000000000000000,
+            "total_circulating_supply": 150000000.0,
+            "owner": {},
+            "creator": {},
+            "holders_exceeding_5_percent": [
+                {
+                    "address": "0xd2dd4f3beab3fd03971d5b4cb33319bd100c421a",
+                    "balance": 31673994867606,
+                    "percentage_of_supply": 21115996.578404
+                },
+                {
+                    "address": "0x027e25a80e097c6aa63dde55041510bbb6e1d50a",
+                    "balance": 83749990,
+                    "percentage_of_supply": 55.83332666666667
+                },
+                {
+                    "address": "0xb3ce8f6aae14d3b1c21f5bb499ba87f7e67e3d4a",
+                    "balance": 497241428571,
+                    "percentage_of_supply": 331494.285714
+                },
+                {
+                    "address": "0xff8afb818b9190e304a4ae1964c58a15ee28f014",
+                    "balance": 1971435533153,
+                    "percentage_of_supply": 1314290.3554353334
+                },
+                {
+                    "address": "0xe0962153560430184b4e658136a253532480aa73",
+                    "balance": 309740006086,
+                    "percentage_of_supply": 206493.33739066665
+                },
+                {
+                    "address": "0x45dacf233a665349b1af9c118c250e2907428ae0",
+                    "balance": 865272248,
+                    "percentage_of_supply": 576.8481653333333
+                },
+                {
+                    "address": "0x9d313648ce66972349a4f7467b5d5f69035c0e38",
+                    "balance": 729864273,
+                    "percentage_of_supply": 486.576182
+                },
+                {
+                    "address": "0xba48a8b29716203b61e7dfca35154f5a52b09fdd",
+                    "balance": 26924314,
+                    "percentage_of_supply": 17.94954266666667
+                },
+                {
+                    "address": "0x1552f3cf0388db3f1de79101f533972636d51c98",
+                    "balance": 7622159,
+                    "percentage_of_supply": 5.081439333333333
+                },
+                {
+                    "address": "0xca0a488fbb69105cbf424bd9397bfbf4530c40aa",
+                    "balance": 476523084971,
+                    "percentage_of_supply": 317682.0566473333
+                },
+                {
+                    "address": "0x54668289abe3a2d259c11ac9d86c0969ffc29ccc",
+                    "balance": 100000000,
+                    "percentage_of_supply": 66.66666666666666
+                },
+                {
+                    "address": "0x15579f74c1b93b573c0a4d865011ec68f909fd02",
+                    "balance": 300000000000,
+                    "percentage_of_supply": 200000.0
+                },
+                {
+                    "address": "0xc6bf8d5dd89db44ba6dd29f70b2b69d4f0dced69",
+                    "balance": 72183346528,
+                    "percentage_of_supply": 48122.231018666665
+                },
+                {
+                    "address": "0x390c04619b49e2e1bdb61fa31b466ea1877d3192",
+                    "balance": 238261501472,
+                    "percentage_of_supply": 158841.00098133335
+                },
+                {
+                    "address": "0x039c9714aa51aa0ba3de50dc9bb860652a51888a",
+                    "balance": 75650665,
+                    "percentage_of_supply": 50.43377666666666
+                },
+                {
+                    "address": "0xe5c839c31aa331e760917e9158f7a58c64779465",
+                    "balance": 106937157,
+                    "percentage_of_supply": 71.291438
+                },
+                {
+                    "address": "0x8d6ad019bd75bd65ae5db1fb72f35e9d9f4da99c",
+                    "balance": 238261517857,
+                    "percentage_of_supply": 158841.01190466667
+                },
+                {
+                    "address": "0xe6b38f99d9a582f788e4d75ff4fba090f6d9caa9",
+                    "balance": 4326788903,
+                    "percentage_of_supply": 2884.525935333333
+                },
+                {
+                    "address": "0xae8bfc911f14e0c3d082df48e3d37120add45782",
+                    "balance": 47675997403,
+                    "percentage_of_supply": 31783.998268666663
+                },
+                {
+                    "address": "0xbf64aa0298befc8e53ca2604b67d85002c919ca0",
+                    "balance": 57182765915,
+                    "percentage_of_supply": 38121.84394333333
+                },
+                {
+                    "address": "0x188db4ef685d89356ee12645c1540fcd4e837aec",
+                    "balance": 5243062500000,
+                    "percentage_of_supply": 3495375.0
+                },
+                {
+                    "address": "0xeb30c14eb1c07adf16de454afee174dc1544e14a",
+                    "balance": 1000000000000,
+                    "percentage_of_supply": 666666.6666666667
+                },
+                {
+                    "address": "0xc02c800a436ab7fa622f2284df0a36f3a18e073f",
+                    "balance": 13810724,
+                    "percentage_of_supply": 9.207149333333334
+                },
+                {
+                    "address": "0xc867efcbc2349a5b9ec8282208a16bb1b8a3b98c",
+                    "balance": 2486206971407,
+                    "percentage_of_supply": 1657471.3142713332
+                },
+                {
+                    "address": "0x66d55504acda4696f827d7a5d1784c8cddec9381",
+                    "balance": 476523084971,
+                    "percentage_of_supply": 317682.0566473333
+                },
+                {
+                    "address": "0x654498bb54f9679879a35f358425c950fe136a76",
+                    "balance": 87428586,
+                    "percentage_of_supply": 58.285724
+                },
+                {
+                    "address": "0xc9810c61a4b65deeaed95fc24e2ce433d14b6f71",
+                    "balance": 23068585,
+                    "percentage_of_supply": 15.379056666666665
+                },
+                {
+                    "address": "0x698b1bbea96af3851859d0e7b166167998c122db",
+                    "balance": 929219903257,
+                    "percentage_of_supply": 619479.9355046666
+                },
+                {
+                    "address": "0x4d80b6f36a7d7677a8664e7b3237d16d788cf04a",
+                    "balance": 667132250001,
+                    "percentage_of_supply": 444754.83333399997
+                },
+                {
+                    "address": "0x3d4a8bedef712e35c86d5f558a38505c36ae5b7d",
+                    "balance": 497241394300,
+                    "percentage_of_supply": 331494.26286666666
+                },
+                {
+                    "address": "0x33e6e238d2891194f7d2cc755665823748b5a684",
+                    "balance": 34597197,
+                    "percentage_of_supply": 23.064798
+                },
+                {
+                    "address": "0x191d0a5d134f5ba9dab346444a62d3a1baaeecb1",
+                    "balance": 79447823630,
+                    "percentage_of_supply": 52965.21575333334
+                },
+                {
+                    "address": "0xf2079431b257869cc9efe577fab91f9f7f7e6c9a",
+                    "balance": 714684586442,
+                    "percentage_of_supply": 476456.39096133335
+                },
+                {
+                    "address": "0x8e9a3c491465dd5bfac73181635666b01637bc0b",
+                    "balance": 51769530,
+                    "percentage_of_supply": 34.51302
+                },
+                {
+                    "address": "0xaf5b58347fef6775251fa5eb566f8aea8f7b5ea8",
+                    "balance": 2859638442315,
+                    "percentage_of_supply": 1906425.62821
+                },
+                {
+                    "address": "0xeba95561e0078295cab2635a960650625ebc0ea5",
+                    "balance": 15671441,
+                    "percentage_of_supply": 10.447627333333333
+                },
+                {
+                    "address": "0xa308211f76c758e44aea38bc98b652536874cf42",
+                    "balance": 14285714,
+                    "percentage_of_supply": 9.523809333333332
+                },
+                {
+                    "address": "0xf45a4cebdb3feb56af7d1f0497fbb5dc3560e1d4",
+                    "balance": 61481729,
+                    "percentage_of_supply": 40.987819333333334
+                },
+                {
+                    "address": "0x45029ffd171446e1ffe77d9186e0792b21f0cada",
+                    "balance": 2044826021,
+                    "percentage_of_supply": 1363.2173473333332
+                },
+                {
+                    "address": "0xaade74503d75c857eddb1b464915b9fa546ac859",
+                    "balance": 95304608772,
+                    "percentage_of_supply": 63536.405848
+                },
+                {
+                    "address": "0xe8a5bb8d25ddc36c20446a14c9f93b778858b320",
+                    "balance": 4900000000,
+                    "percentage_of_supply": 3266.6666666666665
+                },
+                {
+                    "address": "0x9318311eab124c8e701da15f30e065b685e1389a",
+                    "balance": 23002843,
+                    "percentage_of_supply": 15.335228666666668
+                },
+                {
+                    "address": "0x79ed19b719e6f86aa5dd136e412cf5d344a31c02",
+                    "balance": 497241445757,
+                    "percentage_of_supply": 331494.29717133334
+                }
+            ],
+            "howmany_holders_exceeding_5_percent": 43,
+            "top_10_holders": [
+                {
+                    "address": "0xd2dd4f3beab3fd03971d5b4cb33319bd100c421a",
+                    "balance": 31673994867606,
+                    "percentage_of_total_supply": 0.21115996578403998,
+                    "percentage_of_circulating_supply": 21115996.578404
+                },
+                {
+                    "address": "0x188db4ef685d89356ee12645c1540fcd4e837aec",
+                    "balance": 5243062500000,
+                    "percentage_of_total_supply": 0.03495375,
+                    "percentage_of_circulating_supply": 3495375.0
+                },
+                {
+                    "address": "0xaf5b58347fef6775251fa5eb566f8aea8f7b5ea8",
+                    "balance": 2859638442315,
+                    "percentage_of_total_supply": 0.019064256282099998,
+                    "percentage_of_circulating_supply": 1906425.62821
+                },
+                {
+                    "address": "0xc867efcbc2349a5b9ec8282208a16bb1b8a3b98c",
+                    "balance": 2486206971407,
+                    "percentage_of_total_supply": 0.016574713142713332,
+                    "percentage_of_circulating_supply": 1657471.3142713332
+                },
+                {
+                    "address": "0xff8afb818b9190e304a4ae1964c58a15ee28f014",
+                    "balance": 1971435533153,
+                    "percentage_of_total_supply": 0.013142903554353333,
+                    "percentage_of_circulating_supply": 1314290.3554353334
+                },
+                {
+                    "address": "0xeb30c14eb1c07adf16de454afee174dc1544e14a",
+                    "balance": 1000000000000,
+                    "percentage_of_total_supply": 0.006666666666666667,
+                    "percentage_of_circulating_supply": 666666.6666666667
+                },
+                {
+                    "address": "0x698b1bbea96af3851859d0e7b166167998c122db",
+                    "balance": 929219903257,
+                    "percentage_of_total_supply": 0.0061947993550466665,
+                    "percentage_of_circulating_supply": 619479.9355046666
+                },
+                {
+                    "address": "0xf2079431b257869cc9efe577fab91f9f7f7e6c9a",
+                    "balance": 714684586442,
+                    "percentage_of_total_supply": 0.004764563909613333,
+                    "percentage_of_circulating_supply": 476456.39096133335
+                },
+                {
+                    "address": "0x4d80b6f36a7d7677a8664e7b3237d16d788cf04a",
+                    "balance": 667132250001,
+                    "percentage_of_total_supply": 0.00444754833334,
+                    "percentage_of_circulating_supply": 444754.83333399997
+                },
+                {
+                    "address": "0x79ed19b719e6f86aa5dd136e412cf5d344a31c02",
+                    "balance": 497241445757,
+                    "percentage_of_total_supply": 0.0033149429717133335,
+                    "percentage_of_circulating_supply": 331494.29717133334
+                }
+            ],
+            "total_top_10_balance": 48042616499938,
+            "top10_percentage_of_total_supply": 0.3202841099995867,
+            "top10_percentage_of_circulating_supply": 32028410.999958664,
+            "top_10_less_than_70_percent_of_total": true,
+            "top_10_less_than_70_percent_of_circulating": false
+        },
+        "liquidity": {
+            "price_usd": null,
+            "liquidity_usd": null,
+            "market_cap_usd": null,
+            "liquidity_to_market_cap_ratio": null,
+            "token_volume": null,
+            "volume_usd": null,
+            "volume_to_liquidity_ratio": null,
+            "locked_liquidity_percent": null,
+            "locked_95_for_15_days": null,
+            "creator_under_5_percent": null,
+            "creator_percent_of_lp": null,
+            "owner_under_5_percent": null,
+            "owner_percent_of_lp": null,
+            "total_lp_supply": null,
+            "lp_holders_count": null,
+            "lp_holders": null,
+            "error": "Exception during liquidity analysis in liquidity_analysis: 'tuple' object has no attribute 'get'"
+        },
+        "security": {
+            "warnings": [],
+            "homany_warnings": 0,
+            "suspicious_urls": {},
+            "howmany_suspicious_urls": 0,
+            "suspicious_addresses": {},
+            "howmany_suspicious_addresses": 0,
+            "howmany_warnings": 0
+        },
+        "lifecycle": {
+            "token_age_seconds": 239770133.412337,
+            "token_creation_date": "2018-01-11T19:39:26",
+            "creation_to_first_trade_seconds": 0.0,
+            "creation_to_first_trade_blocks": 0,
+            "last_tx_hash": "0x11c1b45cccd4097737f64f6eed13e1ece473827618b313260833bec7d3a46dfa",
+            "last_active_age": "2025-08-17T19:25:35",
+            "inactive_days": 0.12693283229166666
+        }
+    },
+    "errors": []
+}

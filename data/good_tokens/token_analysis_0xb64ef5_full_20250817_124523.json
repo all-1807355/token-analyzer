@@ -1,0 +1,1201 @@
+{
+    "token_address": "0xb64ef51c888972c908cfacf59b47c1afbc0ab8ac",
+    "chain": "eth",
+    "token_name": "StorjToken",
+    "analyses": {
+        "contract": {
+            "contract_name": "CentrallyIssuedToken",
+            "compiler_version": "v0.4.8+commit.60cc1668",
+            "license_type": "",
+            "implementation": "",
+            "source_code": "/*\r\n * ERC20 interface\r\n * see https://github.com/ethereum/EIPs/issues/20\r\n */\r\ncontract ERC20 {\r\n  uint public totalSupply;\r\n  function balanceOf(address who) constant returns (uint);\r\n  function allowance(address owner, address spender) constant returns (uint);\r\n\r\n  function transfer(address to, uint value) returns (bool ok);\r\n  function transferFrom(address from, address to, uint value) returns (bool ok);\r\n  function approve(address spender, uint value) returns (bool ok);\r\n  event Transfer(address indexed from, address indexed to, uint value);\r\n  event Approval(address indexed owner, address indexed spender, uint value);\r\n}\r\n\r\n\r\n\r\n/**\r\n * Math operations with safety checks\r\n */\r\ncontract SafeMath {\r\n  function safeMul(uint a, uint b) internal returns (uint) {\r\n    uint c = a * b;\r\n    assert(a == 0 || c / a == b);\r\n    return c;\r\n  }\r\n\r\n  function safeDiv(uint a, uint b) internal returns (uint) {\r\n    assert(b > 0);\r\n    uint c = a / b;\r\n    assert(a == b * c + a % b);\r\n    return c;\r\n  }\r\n\r\n  function safeSub(uint a, uint b) internal returns (uint) {\r\n    assert(b <= a);\r\n    return a - b;\r\n  }\r\n\r\n  function safeAdd(uint a, uint b) internal returns (uint) {\r\n    uint c = a + b;\r\n    assert(c>=a && c>=b);\r\n    return c;\r\n  }\r\n\r\n  function max64(uint64 a, uint64 b) internal constant returns (uint64) {\r\n    return a >= b ? a : b;\r\n  }\r\n\r\n  function min64(uint64 a, uint64 b) internal constant returns (uint64) {\r\n    return a < b ? a : b;\r\n  }\r\n\r\n  function max256(uint256 a, uint256 b) internal constant returns (uint256) {\r\n    return a >= b ? a : b;\r\n  }\r\n\r\n  function min256(uint256 a, uint256 b) internal constant returns (uint256) {\r\n    return a < b ? a : b;\r\n  }\r\n\r\n  function assert(bool assertion) internal {\r\n    if (!assertion) {\r\n      throw;\r\n    }\r\n  }\r\n}\r\n\r\n\r\n\r\n/**\r\n * Standard ERC20 token with Short Hand Attack and approve() race condition mitigation.\r\n *\r\n * Based on code by FirstBlood:\r\n * https://github.com/Firstbloodio/token/blob/master/smart_contract/FirstBloodToken.sol\r\n */\r\ncontract StandardToken is ERC20, SafeMath {\r\n\r\n  mapping(address => uint) balances;\r\n  mapping (address => mapping (address => uint)) allowed;\r\n\r\n  // Interface marker\r\n  bool public constant isToken = true;\r\n\r\n  /**\r\n   *\r\n   * Fix for the ERC20 short address attack\r\n   *\r\n   * http://vessenes.com/the-erc20-short-address-attack-explained/\r\n   */\r\n  modifier onlyPayloadSize(uint size) {\r\n     if(msg.data.length < size + 4) {\r\n       throw;\r\n     }\r\n     _;\r\n  }\r\n\r\n  function transfer(address _to, uint _value) onlyPayloadSize(2 * 32) returns (bool success) {\r\n    balances[msg.sender] = safeSub(balances[msg.sender], _value);\r\n    balances[_to] = safeAdd(balances[_to], _value);\r\n    Transfer(msg.sender, _to, _value);\r\n    return true;\r\n  }\r\n\r\n  function transferFrom(address _from, address _to, uint _value)  returns (bool success) {\r\n    var _allowance = allowed[_from][msg.sender];\r\n\r\n    // Check is not needed because safeSub(_allowance, _value) will already throw if this condition is not met\r\n    // if (_value > _allowance) throw;\r\n\r\n    balances[_to] = safeAdd(balances[_to], _value);\r\n    balances[_from] = safeSub(balances[_from], _value);\r\n    allowed[_from][msg.sender] = safeSub(_allowance, _value);\r\n    Transfer(_from, _to, _value);\r\n    return true;\r\n  }\r\n\r\n  function balanceOf(address _owner) constant returns (uint balance) {\r\n    return balances[_owner];\r\n  }\r\n\r\n  function approve(address _spender, uint _value) returns (bool success) {\r\n\r\n    // To change the approve amount you first have to reduce the addresses`\r\n    //  allowance to zero by calling `approve(_spender, 0)` if it is not\r\n    //  already 0 to mitigate the race condition described here:\r\n    //  https://github.com/ethereum/EIPs/issues/20#issuecomment-263524729\r\n    if ((_value != 0) && (allowed[msg.sender][_spender] != 0)) throw;\r\n\r\n    allowed[msg.sender][_spender] = _value;\r\n    Approval(msg.sender, _spender, _value);\r\n    return true;\r\n  }\r\n\r\n  function allowance(address _owner, address _spender) constant returns (uint remaining) {\r\n    return allowed[_owner][_spender];\r\n  }\r\n\r\n}\r\n\r\n\r\n\r\n/**\r\n * A trait that allows any token owner to decrease the token supply.\r\n *\r\n * We add a Burned event to differentiate from normal transfers.\r\n * However, we still try to support some legacy Ethereum ecocsystem,\r\n * as ERC-20 has not standardized on the burn event yet.\r\n *\r\n */\r\ncontract BurnableToken is StandardToken {\r\n\r\n  address public constant BURN_ADDRESS = 0;\r\n\r\n  /** How many tokens we burned */\r\n  event Burned(address burner, uint burnedAmount);\r\n\r\n  /**\r\n   * Burn extra tokens from a balance.\r\n   *\r\n   */\r\n  function burn(uint burnAmount) {\r\n    address burner = msg.sender;\r\n    balances[burner] = safeSub(balances[burner], burnAmount);\r\n    totalSupply = safeSub(totalSupply, burnAmount);\r\n    Burned(burner, burnAmount);\r\n\r\n    // Keep token balance tracking services happy by sending the burned amount to\r\n    // \"burn address\", so that it will show up as a ERC-20 transaction\r\n    // in etherscan, etc. as there is no standarized burn event yet\r\n    Transfer(burner, BURN_ADDRESS, burnAmount);\r\n  }\r\n}\r\n\r\n\r\n\r\n\r\n/**\r\n * Upgrade agent interface inspired by Lunyr.\r\n *\r\n * Upgrade agent transfers tokens to a new contract.\r\n * Upgrade agent itself can be the token contract, or just a middle man contract doing the heavy lifting.\r\n */\r\ncontract UpgradeAgent {\r\n\r\n  uint public originalSupply;\r\n\r\n  /** Interface marker */\r\n  function isUpgradeAgent() public constant returns (bool) {\r\n    return true;\r\n  }\r\n\r\n  function upgradeFrom(address _from, uint256 _value) public;\r\n\r\n}\r\n\r\n\r\n/**\r\n * A token upgrade mechanism where users can opt-in amount of tokens to the next smart contract revision.\r\n *\r\n * First envisioned by Golem and Lunyr projects.\r\n */\r\ncontract UpgradeableToken is StandardToken {\r\n\r\n  /** Contract / person who can set the upgrade path. This can be the same as team multisig wallet, as what it is with its default value. */\r\n  address public upgradeMaster;\r\n\r\n  /** The next contract where the tokens will be migrated. */\r\n  UpgradeAgent public upgradeAgent;\r\n\r\n  /** How many tokens we have upgraded by now. */\r\n  uint256 public totalUpgraded;\r\n\r\n  /**\r\n   * Upgrade states.\r\n   *\r\n   * - NotAllowed: The child contract has not reached a condition where the upgrade can bgun\r\n   * - WaitingForAgent: Token allows upgrade, but we don't have a new agent yet\r\n   * - ReadyToUpgrade: The agent is set, but not a single token has been upgraded yet\r\n   * - Upgrading: Upgrade agent is set and the balance holders can upgrade their tokens\r\n   *\r\n   */\r\n  enum UpgradeState {Unknown, NotAllowed, WaitingForAgent, ReadyToUpgrade, Upgrading}\r\n\r\n  /**\r\n   * Somebody has upgraded some of his tokens.\r\n   */\r\n  event Upgrade(address indexed _from, address indexed _to, uint256 _value);\r\n\r\n  /**\r\n   * New upgrade agent available.\r\n   */\r\n  event UpgradeAgentSet(address agent);\r\n\r\n  /**\r\n   * Do not allow construction without upgrade master set.\r\n   */\r\n  function UpgradeableToken(address _upgradeMaster) {\r\n    upgradeMaster = _upgradeMaster;\r\n  }\r\n\r\n  /**\r\n   * Allow the token holder to upgrade some of their tokens to a new contract.\r\n   */\r\n  function upgrade(uint256 value) public {\r\n\r\n      UpgradeState state = getUpgradeState();\r\n      if(!(state == UpgradeState.ReadyToUpgrade || state == UpgradeState.Upgrading)) {\r\n        // Called in a bad state\r\n        throw;\r\n      }\r\n\r\n      // Validate input value.\r\n      if (value == 0) throw;\r\n\r\n      balances[msg.sender] = safeSub(balances[msg.sender], value);\r\n\r\n      // Take tokens out from circulation\r\n      totalSupply = safeSub(totalSupply, value);\r\n      totalUpgraded = safeAdd(totalUpgraded, value);\r\n\r\n      // Upgrade agent reissues the tokens\r\n      upgradeAgent.upgradeFrom(msg.sender, value);\r\n      Upgrade(msg.sender, upgradeAgent, value);\r\n  }\r\n\r\n  /**\r\n   * Set an upgrade agent that handles\r\n   */\r\n  function setUpgradeAgent(address agent) external {\r\n\r\n      if(!canUpgrade()) {\r\n        // The token is not yet in a state that we could think upgrading\r\n        throw;\r\n      }\r\n\r\n      if (agent == 0x0) throw;\r\n      // Only a master can designate the next agent\r\n      if (msg.sender != upgradeMaster) throw;\r\n      // Upgrade has already begun for an agent\r\n      if (getUpgradeState() == UpgradeState.Upgrading) throw;\r\n\r\n      upgradeAgent = UpgradeAgent(agent);\r\n\r\n      // Bad interface\r\n      if(!upgradeAgent.isUpgradeAgent()) throw;\r\n      // Make sure that token supplies match in source and target\r\n      if (upgradeAgent.originalSupply() != totalSupply) throw;\r\n\r\n      UpgradeAgentSet(upgradeAgent);\r\n  }\r\n\r\n  /**\r\n   * Get the state of the token upgrade.\r\n   */\r\n  function getUpgradeState() public constant returns(UpgradeState) {\r\n    if(!canUpgrade()) return UpgradeState.NotAllowed;\r\n    else if(address(upgradeAgent) == 0x00) return UpgradeState.WaitingForAgent;\r\n    else if(totalUpgraded == 0) return UpgradeState.ReadyToUpgrade;\r\n    else return UpgradeState.Upgrading;\r\n  }\r\n\r\n  /**\r\n   * Change the upgrade master.\r\n   *\r\n   * This allows us to set a new owner for the upgrade mechanism.\r\n   */\r\n  function setUpgradeMaster(address master) public {\r\n      if (master == 0x0) throw;\r\n      if (msg.sender != upgradeMaster) throw;\r\n      upgradeMaster = master;\r\n  }\r\n\r\n  /**\r\n   * Child contract can enable to provide the condition when the upgrade can begun.\r\n   */\r\n  function canUpgrade() public constant returns(bool) {\r\n     return true;\r\n  }\r\n\r\n}\r\n\r\n\r\n\r\n/**\r\n * Centrally issued Ethereum token.\r\n *\r\n * We mix in burnable and upgradeable traits.\r\n *\r\n * Token supply is created in the token contract creation and allocated to owner.\r\n * The owner can then transfer from its supply to crowdsale participants.\r\n * The owner, or anybody, can burn any excessive tokens they are holding.\r\n *\r\n */\r\ncontract CentrallyIssuedToken is BurnableToken, UpgradeableToken {\r\n\r\n  string public name;\r\n  string public symbol;\r\n  uint public decimals;\r\n\r\n  function CentrallyIssuedToken(address _owner, string _name, string _symbol, uint _totalSupply, uint _decimals)  UpgradeableToken(_owner) {\r\n    name = _name;\r\n    symbol = _symbol;\r\n    totalSupply = _totalSupply;\r\n    decimals = _decimals;\r\n\r\n    // Allocate initial balance to the owner\r\n    balances[_owner] = _totalSupply;\r\n  }\r\n}",
+            "abi": "[{\"constant\":true,\"inputs\":[],\"name\":\"name\",\"outputs\":[{\"name\":\"\",\"type\":\"string\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_spender\",\"type\":\"address\"},{\"name\":\"_value\",\"type\":\"uint256\"}],\"name\":\"approve\",\"outputs\":[{\"name\":\"success\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"totalSupply\",\"outputs\":[{\"name\":\"\",\"type\":\"uint256\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_from\",\"type\":\"address\"},{\"name\":\"_to\",\"type\":\"address\"},{\"name\":\"_value\",\"type\":\"uint256\"}],\"name\":\"transferFrom\",\"outputs\":[{\"name\":\"success\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"decimals\",\"outputs\":[{\"name\":\"\",\"type\":\"uint256\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"burnAmount\",\"type\":\"uint256\"}],\"name\":\"burn\",\"outputs\":[],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"value\",\"type\":\"uint256\"}],\"name\":\"upgrade\",\"outputs\":[],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"upgradeAgent\",\"outputs\":[{\"name\":\"\",\"type\":\"address\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"upgradeMaster\",\"outputs\":[{\"name\":\"\",\"type\":\"address\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[{\"name\":\"_owner\",\"type\":\"address\"}],\"name\":\"balanceOf\",\"outputs\":[{\"name\":\"balance\",\"type\":\"uint256\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"getUpgradeState\",\"outputs\":[{\"name\":\"\",\"type\":\"uint8\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"symbol\",\"outputs\":[{\"name\":\"\",\"type\":\"string\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"canUpgrade\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"_to\",\"type\":\"address\"},{\"name\":\"_value\",\"type\":\"uint256\"}],\"name\":\"transfer\",\"outputs\":[{\"name\":\"success\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"totalUpgraded\",\"outputs\":[{\"name\":\"\",\"type\":\"uint256\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"agent\",\"type\":\"address\"}],\"name\":\"setUpgradeAgent\",\"outputs\":[],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[{\"name\":\"_owner\",\"type\":\"address\"},{\"name\":\"_spender\",\"type\":\"address\"}],\"name\":\"allowance\",\"outputs\":[{\"name\":\"remaining\",\"type\":\"uint256\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"isToken\",\"outputs\":[{\"name\":\"\",\"type\":\"bool\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":true,\"inputs\":[],\"name\":\"BURN_ADDRESS\",\"outputs\":[{\"name\":\"\",\"type\":\"address\"}],\"payable\":false,\"type\":\"function\"},{\"constant\":false,\"inputs\":[{\"name\":\"master\",\"type\":\"address\"}],\"name\":\"setUpgradeMaster\",\"outputs\":[],\"payable\":false,\"type\":\"function\"},{\"inputs\":[{\"name\":\"_owner\",\"type\":\"address\"},{\"name\":\"_name\",\"type\":\"string\"},{\"name\":\"_symbol\",\"type\":\"string\"},{\"name\":\"_totalSupply\",\"type\":\"uint256\"},{\"name\":\"_decimals\",\"type\":\"uint256\"}],\"payable\":false,\"type\":\"constructor\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"name\":\"_from\",\"type\":\"address\"},{\"indexed\":true,\"name\":\"_to\",\"type\":\"address\"},{\"indexed\":false,\"name\":\"_value\",\"type\":\"uint256\"}],\"name\":\"Upgrade\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"name\":\"agent\",\"type\":\"address\"}],\"name\":\"UpgradeAgentSet\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":false,\"name\":\"burner\",\"type\":\"address\"},{\"indexed\":false,\"name\":\"burnedAmount\",\"type\":\"uint256\"}],\"name\":\"Burned\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"name\":\"from\",\"type\":\"address\"},{\"indexed\":true,\"name\":\"to\",\"type\":\"address\"},{\"indexed\":false,\"name\":\"value\",\"type\":\"uint256\"}],\"name\":\"Transfer\",\"type\":\"event\"},{\"anonymous\":false,\"inputs\":[{\"indexed\":true,\"name\":\"owner\",\"type\":\"address\"},{\"indexed\":true,\"name\":\"spender\",\"type\":\"address\"},{\"indexed\":false,\"name\":\"value\",\"type\":\"uint256\"}],\"name\":\"Approval\",\"type\":\"event\"}]",
+            "verified": true,
+            "owner": null,
+            "creator": "0x00f6bf3c5033e944feddb3dc8ffb4d47af17ef0b",
+            "is_hidden_owner": true,
+            "is_proxy": false,
+            "is_sellable": true,
+            "is_hardcoded_owner": false,
+            "code_analysis": {
+                "mint_function_detected": {
+                    "found": false,
+                    "snippets": [],
+                    "snippets_number": 0
+                },
+                "ownership_renounced": {
+                    "found": false,
+                    "snippets": [],
+                    "snippets_number": 0
+                },
+                "is_honeypot_suspected": {
+                    "found": false,
+                    "snippets": [],
+                    "snippets_number": 0
+                },
+                "delayed_trading_detected": {
+                    "found": false,
+                    "snippets": [],
+                    "snippets_number": 0
+                },
+                "transfer_cooldown_detected": {
+                    "found": false,
+                    "snippets": [],
+                    "snippets_number": 0
+                },
+                "high_tax_detected": {
+                    "found": false,
+                    "snippets": [],
+                    "snippets_number": 0
+                },
+                "blacklist_or_whitelist_detected": {
+                    "found": false,
+                    "snippets": [],
+                    "snippets_number": 0
+                },
+                "trading_disabled_possible": {
+                    "found": false,
+                    "snippets": [],
+                    "snippets_number": 0
+                },
+                "other_suspicious_detected": {
+                    "found": false,
+                    "snippets": [],
+                    "snippets_number": 0
+                }
+            }
+        },
+        "holder": {
+            "total_holders": 200,
+            "holders_list": {
+                "0xcb1c98a7fbf4fde5f27db695434932a580b8d5b3": {
+                    "balance": 14945620494315896,
+                    "percentage_of_total_supply": 35.16616603446633,
+                    "percentage_of_circulating_supply": 36.6454561281729
+                },
+                "0xf977814e90da44bfa03b6295a0616a897441acec": {
+                    "balance": 4700000000000000,
+                    "percentage_of_total_supply": 11.05882358145326,
+                    "percentage_of_circulating_supply": 11.524020957705728
+                },
+                "0x22af984f13dfb5c80145e3f9ee1050ae5a5fb651": {
+                    "balance": 1254396269667448,
+                    "percentage_of_total_supply": 2.9515206484011434,
+                    "percentage_of_circulating_supply": 3.0756784895565015
+                },
+                "0x0f564a2a5fde73349890e86e9b2aa1639994bf2f": {
+                    "balance": 1102661936508959,
+                    "percentage_of_total_supply": 2.5944986863481256,
+                    "percentage_of_circulating_supply": 2.7036381416156656
+                },
+                "0x06b93279249ec9c4e3d36f6e38d74a2744e618af": {
+                    "balance": 965623226406574,
+                    "percentage_of_total_supply": 2.2720546610604253,
+                    "percentage_of_circulating_supply": 2.367630276246124
+                },
+                "0x073f564419b625a45d8aea3bb0de4d5647113ad7": {
+                    "balance": 613297195000000,
+                    "percentage_of_total_supply": 1.443052230320242,
+                    "percentage_of_circulating_supply": 1.5037552613791783
+                },
+                "0x28c6c06298d514db089934071355e5743bf21d60": {
+                    "balance": 593873884532030,
+                    "percentage_of_total_supply": 1.3973503231217155,
+                    "percentage_of_circulating_supply": 1.456130870549197
+                },
+                "0x76ec5a0d3632b2133d9f1980903305b62678fbd3": {
+                    "balance": 518620724768811,
+                    "percentage_of_total_supply": 1.2202840640220654,
+                    "percentage_of_circulating_supply": 1.2716161917736837
+                },
+                "0x1f65f567d4d9768a984a82793a4e907b5d513259": {
+                    "balance": 484111407760000,
+                    "percentage_of_total_supply": 1.1390856706780472,
+                    "percentage_of_circulating_supply": 1.187002129551205
+                },
+                "0x40a8a8f85dde358ec7fc6623f7fc6cb41d6501a2": {
+                    "balance": 453906273381854,
+                    "percentage_of_total_supply": 1.068014765924429,
+                    "percentage_of_circulating_supply": 1.1129415760184236
+                },
+                "0xc06f25517e906b7f9b4dec3c7889503bb00b3370": {
+                    "balance": 371300493169447,
+                    "percentage_of_total_supply": 0.8736482233335117,
+                    "percentage_of_circulating_supply": 0.910398864870464
+                },
+                "0x9b0c45d46d386cedd98873168c36efd0dcba8d46": {
+                    "balance": 369719619249552,
+                    "percentage_of_total_supply": 0.8699285199750778,
+                    "percentage_of_circulating_supply": 0.9065226895120894
+                },
+                "0x91d40e4818f4d4c57b4578d9eca6afc92ac8debe": {
+                    "balance": 363472124838230,
+                    "percentage_of_total_supply": 0.8552285330557321,
+                    "percentage_of_circulating_supply": 0.8912043370590629
+                },
+                "0x77fb357f55bef5a70d30663955f8c9f35794df0e": {
+                    "balance": 359744080756741,
+                    "percentage_of_total_supply": 0.8464566645874197,
+                    "percentage_of_circulating_supply": 0.8820634736279288
+                },
+                "0xce27fc71139d02f9a3d5cc1356add185750660ac": {
+                    "balance": 347514123224895,
+                    "percentage_of_total_supply": 0.8176802937888346,
+                    "percentage_of_circulating_supply": 0.8520766040728557
+                },
+                "0x25d11d211114165700d2f93569f07a09e948a4c1": {
+                    "balance": 310453524162534,
+                    "percentage_of_total_supply": 0.7304788838199787,
+                    "percentage_of_circulating_supply": 0.7612070040090732
+                },
+                "0xa5946a2c7a6c4232224b89a696ae51879bf5aed1": {
+                    "balance": 303789110145270,
+                    "percentage_of_total_supply": 0.7147979095879177,
+                    "percentage_of_circulating_supply": 0.7448663983057161
+                },
+                "0xfbb1b73c4f0bda4f67dca266ce6ef42f520fbb98": {
+                    "balance": 298098762198070,
+                    "percentage_of_total_supply": 0.7014088555314987,
+                    "percentage_of_circulating_supply": 0.7309141240503606
+                },
+                "0xafcd96e580138cfa2332c632e66308eacd45c5da": {
+                    "balance": 283000100000000,
+                    "percentage_of_total_supply": 0.6658825913688574,
+                    "percentage_of_circulating_supply": 0.6938934220069823
+                },
+                "0xa9d1e08c7793af67e9d92fe308d5697fb81d3e43": {
+                    "balance": 248223245708258,
+                    "percentage_of_total_supply": 0.5840546985326277,
+                    "percentage_of_circulating_supply": 0.6086233799429157
+                },
+                "0x77982b95b526ef9f92d465d12aa14ec6411b16c5": {
+                    "balance": 202163377963537,
+                    "percentage_of_total_supply": 0.4756785386232789,
+                    "percentage_of_circulating_supply": 0.49568829883667764
+                },
+                "0x651ff048ebe4d655ad4f9cad09a0c59e0a1d8071": {
+                    "balance": 202163377963537,
+                    "percentage_of_total_supply": 0.4756785386232789,
+                    "percentage_of_circulating_supply": 0.49568829883667764
+                },
+                "0x2748857513d4b12ddf32130d728e7e594770b6bd": {
+                    "balance": 202163377963537,
+                    "percentage_of_total_supply": 0.4756785386232789,
+                    "percentage_of_circulating_supply": 0.49568829883667764
+                },
+                "0x3ebb923414bd98ca34de85e2e16ff2bda8cf73c9": {
+                    "balance": 202163377963537,
+                    "percentage_of_total_supply": 0.4756785386232789,
+                    "percentage_of_circulating_supply": 0.49568829883667764
+                },
+                "0xa50265c597fb6986da2dffd5efe0648467d9ae0b": {
+                    "balance": 202163377963537,
+                    "percentage_of_total_supply": 0.4756785386232789,
+                    "percentage_of_circulating_supply": 0.49568829883667764
+                },
+                "0xf37f9f2fee41440999f78b37f45c7f476a08c1c9": {
+                    "balance": 202163377963537,
+                    "percentage_of_total_supply": 0.4756785386232789,
+                    "percentage_of_circulating_supply": 0.49568829883667764
+                },
+                "0xdc83618a8b4a6ca25c49a851755e5f689f3a8984": {
+                    "balance": 202163377963537,
+                    "percentage_of_total_supply": 0.4756785386232789,
+                    "percentage_of_circulating_supply": 0.49568829883667764
+                },
+                "0xc43aeeb3fd5ffa53e38727097575624446fb5fc7": {
+                    "balance": 202163377963537,
+                    "percentage_of_total_supply": 0.4756785386232789,
+                    "percentage_of_circulating_supply": 0.49568829883667764
+                },
+                "0xf05f4e1f0c6365f1533b7052ffb62b5514c6d786": {
+                    "balance": 202163377963537,
+                    "percentage_of_total_supply": 0.4756785386232789,
+                    "percentage_of_circulating_supply": 0.49568829883667764
+                },
+                "0xaa802bb85e6a637863fb66f60ce874905afad8a3": {
+                    "balance": 202163377963537,
+                    "percentage_of_total_supply": 0.4756785386232789,
+                    "percentage_of_circulating_supply": 0.49568829883667764
+                },
+                "0x2a8503a83d36007dd17e4c0acc30561f4ca4d985": {
+                    "balance": 202163377963537,
+                    "percentage_of_total_supply": 0.4756785386232789,
+                    "percentage_of_circulating_supply": 0.49568829883667764
+                },
+                "0x9f12a449f637434521af3b57cfe8dac9114b5f81": {
+                    "balance": 202163377963537,
+                    "percentage_of_total_supply": 0.4756785386232789,
+                    "percentage_of_circulating_supply": 0.49568829883667764
+                },
+                "0xf4d98746b0e9c88ff7fa26beb116d1daf19494bc": {
+                    "balance": 202163377963537,
+                    "percentage_of_total_supply": 0.4756785386232789,
+                    "percentage_of_circulating_supply": 0.49568829883667764
+                },
+                "0xa74e8ae2f83d2564af25420ad4d6a7fe224b053f": {
+                    "balance": 200355066779838,
+                    "percentage_of_total_supply": 0.47142368875925844,
+                    "percentage_of_circulating_supply": 0.49125446564965614
+                },
+                "0x26734f31afa10c83ce9cf139b175e6501890d46e": {
+                    "balance": 189812832444743,
+                    "percentage_of_total_supply": 0.44661843138348084,
+                    "percentage_of_circulating_supply": 0.46540575726270306
+                },
+                "0xb334a61a6209f14b5fa5f1684a4ed7621f66e1ef": {
+                    "balance": 167098682722383,
+                    "percentage_of_total_supply": 0.393173372961716,
+                    "percentage_of_circulating_supply": 0.4097124939782472
+                },
+                "0x53b9b72dc6f96eb4b54143b211b22e2548e4cf5c": {
+                    "balance": 162791818207695,
+                    "percentage_of_total_supply": 0.38303957405593814,
+                    "percentage_of_circulating_supply": 0.39915240952521236
+                },
+                "0x71660c4005ba85c37ccec55d0c4493e66fe775d3": {
+                    "balance": 159964228374429,
+                    "percentage_of_total_supply": 0.37638642147576806,
+                    "percentage_of_circulating_supply": 0.3922193872915203
+                },
+                "0xc80afd311c9626528de66d86814770361fe92416": {
+                    "balance": 153887519025221,
+                    "percentage_of_total_supply": 0.36208828176328745,
+                    "percentage_of_circulating_supply": 0.3773197860374438
+                },
+                "0x48282b1a9e9e46c96fb254379400e3d85620e4c8": {
+                    "balance": 141063868800000,
+                    "percentage_of_total_supply": 0.33191498697371674,
+                    "percentage_of_circulating_supply": 0.3458772298779258
+                },
+                "0x43684d03d81d3a4c70da68febdd61029d426f042": {
+                    "balance": 134324954187000,
+                    "percentage_of_total_supply": 0.31605871722145196,
+                    "percentage_of_circulating_supply": 0.3293539547220957
+                },
+                "0xff8a035ea6c80673f741c2265985ed976a40d390": {
+                    "balance": 121093471883173,
+                    "percentage_of_total_supply": 0.2849258175365278,
+                    "percentage_of_circulating_supply": 0.29691142719639046
+                },
+                "0xedc6bacdc1e29d7c5fa6f6eca6fdd447b9c487c9": {
+                    "balance": 118409988660000,
+                    "percentage_of_total_supply": 0.2786117393346427,
+                    "percentage_of_circulating_supply": 0.29033174274883783
+                },
+                "0x4fb312915b779b1339388e14b6d079741ca83128": {
+                    "balance": 112313600000000,
+                    "percentage_of_total_supply": 0.26426729536125715,
+                    "percentage_of_circulating_supply": 0.2753838894117826
+                },
+                "0xcffad3200574698b78f32232aa9d63eabd290703": {
+                    "balance": 110452201664568,
+                    "percentage_of_total_supply": 0.2598875345513948,
+                    "percentage_of_circulating_supply": 0.2708198908100471
+                },
+                "0xd6216fc19db775df9774a6e33526131da7d19a2c": {
+                    "balance": 106861381771091,
+                    "percentage_of_total_supply": 0.2514385465269831,
+                    "percentage_of_circulating_supply": 0.26201549002115865
+                },
+                "0x593aebee9117eea447279e5973f64c68d8e977a0": {
+                    "balance": 104078300000000,
+                    "percentage_of_total_supply": 0.24489011879948228,
+                    "percentage_of_circulating_supply": 0.25519159796646473
+                },
+                "0x5bdf85216ec1e38d6458c870992a69e38e03f7ef": {
+                    "balance": 100599992926341,
+                    "percentage_of_total_supply": 0.236705866822947,
+                    "percentage_of_circulating_supply": 0.24666306953791528
+                },
+                "0x9642b23ed1e01df1092b92641051881a322f5d4e": {
+                    "balance": 100136896878792,
+                    "percentage_of_total_supply": 0.23561622905888044,
+                    "percentage_of_circulating_supply": 0.24552759537676944
+                },
+                "0xa023f08c70a23abc7edfc5b6b5e171d78dfc947e": {
+                    "balance": 96759467830206,
+                    "percentage_of_total_supply": 0.22766933714245743,
+                    "percentage_of_circulating_supply": 0.23724641173015898
+                },
+                "0x98a5f9497bd489f7cc2f33cfc9243f1501b2bc7b": {
+                    "balance": 94967085708277,
+                    "percentage_of_total_supply": 0.22345196742395457,
+                    "percentage_of_circulating_supply": 0.2328516353179618
+                },
+                "0x0528c2c0843214a29e8b9d891e3d3e5ad75108b7": {
+                    "balance": 90301817471369,
+                    "percentage_of_total_supply": 0.21247486563839646,
+                    "percentage_of_circulating_supply": 0.22141277384233482
+                },
+                "0xb2edefc9a9a85ca7c4cdee20d5794178e4a47e4a": {
+                    "balance": 84556908353984,
+                    "percentage_of_total_supply": 0.19895743235740856,
+                    "percentage_of_circulating_supply": 0.20732671999789667
+                },
+                "0xb6f0c2d4ee9f0fe154cb91567e6d3291768d0389": {
+                    "balance": 83375753638356,
+                    "percentage_of_total_supply": 0.19617824477814652,
+                    "percentage_of_circulating_supply": 0.20443062389211156
+                },
+                "0x3db55db5bc2336896933373d799480de16d8cf11": {
+                    "balance": 83375753638356,
+                    "percentage_of_total_supply": 0.19617824477814652,
+                    "percentage_of_circulating_supply": 0.20443062389211156
+                },
+                "0x313ef2f48200f1cef8bd4d7cea23dc01b9fa2d64": {
+                    "balance": 83375753638356,
+                    "percentage_of_total_supply": 0.19617824477814652,
+                    "percentage_of_circulating_supply": 0.20443062389211156
+                },
+                "0xa559fe897ed4e8eda7f2dc150674e3ea960cad2f": {
+                    "balance": 82911722976228,
+                    "percentage_of_total_supply": 0.1950864079209426,
+                    "percentage_of_circulating_supply": 0.20329285813139214
+                },
+                "0x138b7078d6f7d8068f9ba088c97c5ca64306cf31": {
+                    "balance": 82911722976228,
+                    "percentage_of_total_supply": 0.1950864079209426,
+                    "percentage_of_circulating_supply": 0.20329285813139214
+                },
+                "0xfa431593d4cef461d4f96301b91c6c6d2b9d6904": {
+                    "balance": 82911722976228,
+                    "percentage_of_total_supply": 0.1950864079209426,
+                    "percentage_of_circulating_supply": 0.20329285813139214
+                },
+                "0x9a7e938073db704dcfb4a87f09b86de9a01785a4": {
+                    "balance": 82857373550256,
+                    "percentage_of_total_supply": 0.1949585269180537,
+                    "percentage_of_circulating_supply": 0.20315959772204312
+                },
+                "0xdfd5293d8e347dfe59e90efd55b2956a1343963d": {
+                    "balance": 82806904079601,
+                    "percentage_of_total_supply": 0.19483977522183607,
+                    "percentage_of_circulating_supply": 0.20303585065022342
+                },
+                "0x82ce5d61cf7b28b530f3a65c42c63b1c4b32464e": {
+                    "balance": 82771145125482,
+                    "percentage_of_total_supply": 0.19475563650586603,
+                    "percentage_of_circulating_supply": 0.2029481725785866
+                },
+                "0x3630d3668268e963d2ba2c40266104e67560d36d": {
+                    "balance": 82045054243402,
+                    "percentage_of_total_supply": 0.19304718736352036,
+                    "percentage_of_circulating_supply": 0.20116785629299322
+                },
+                "0x6807ec42e05104c4142219899f22919a9f416939": {
+                    "balance": 81780063096996,
+                    "percentage_of_total_supply": 0.1924236787808074,
+                    "percentage_of_circulating_supply": 0.20051811937282527
+                },
+                "0x8bfdaba822c45fdebb2180856dba0915574033da": {
+                    "balance": 77980685571423,
+                    "percentage_of_total_supply": 0.18348396691386054,
+                    "percentage_of_circulating_supply": 0.1912023520896467
+                },
+                "0x21a31ee1afc51d94c2efccaa2092ad1028285549": {
+                    "balance": 77655485000000,
+                    "percentage_of_total_supply": 0.18271878909514677,
+                    "percentage_of_circulating_supply": 0.19040498651506443
+                },
+                "0x529fc38614132943747ecf0f0833bfa4e6223f9e": {
+                    "balance": 76072237696013,
+                    "percentage_of_total_supply": 0.17899350130352895,
+                    "percentage_of_circulating_supply": 0.18652299181030332
+                },
+                "0x53878f7fa64fb5c3b1f1c760af62456c10b5bff7": {
+                    "balance": 76068222508976,
+                    "percentage_of_total_supply": 0.1789840538045739,
+                    "percentage_of_circulating_supply": 0.18651314689550258
+                },
+                "0x61072d86f87c65af4bf3511673b0826372bfad18": {
+                    "balance": 76025676766108,
+                    "percentage_of_total_supply": 0.17888394617382516,
+                    "percentage_of_circulating_supply": 0.1864088281651894
+                },
+                "0x642b5b4cbae2eb3d29af42d36e3c7d0146fe57bd": {
+                    "balance": 75946811960956,
+                    "percentage_of_total_supply": 0.17869838192553544,
+                    "percentage_of_circulating_supply": 0.18621545802319003
+                },
+                "0x2217045911adfce3e1cf5bf4ba72f8769c315ff6": {
+                    "balance": 75925636285616,
+                    "percentage_of_total_supply": 0.17864855680685393,
+                    "percentage_of_circulating_supply": 0.1861635369750173
+                },
+                "0x628d6380a28b8d9ae7516597fa625934185bfed4": {
+                    "balance": 75564180731056,
+                    "percentage_of_total_supply": 0.1777980731450634,
+                    "percentage_of_circulating_supply": 0.18527727710564953
+                },
+                "0x4a4aaa0155237881fbd5c34bfae16e985a7b068d": {
+                    "balance": 75145602657928,
+                    "percentage_of_total_supply": 0.17681318355659803,
+                    "percentage_of_circulating_supply": 0.1842509574275297
+                },
+                "0xd57494189a23787b5d7a45fe841e20b7d2094006": {
+                    "balance": 74416856474273,
+                    "percentage_of_total_supply": 0.17509848664581124,
+                    "percentage_of_circulating_supply": 0.18246413055661728
+                },
+                "0xc5357bb3eef6a7f7a70060de288de9f4a8d34eac": {
+                    "balance": 74063717660000,
+                    "percentage_of_total_supply": 0.1742675717847881,
+                    "percentage_of_circulating_supply": 0.18159826266371062
+                },
+                "0x58edf78281334335effa23101bbe3371b6a36a51": {
+                    "balance": 67638405090554,
+                    "percentage_of_total_supply": 0.15914918919729928,
+                    "percentage_of_circulating_supply": 0.16584391442751792
+                },
+                "0xc3681709ee476308b45812eabe0eb22f3b816880": {
+                    "balance": 66717593000000,
+                    "percentage_of_total_supply": 0.156982572503447,
+                    "percentage_of_circulating_supply": 0.16358615744248534
+                },
+                "0x68ee3019b38ae718bffd37b7c5ff51fc3f40caac": {
+                    "balance": 66070501453727,
+                    "percentage_of_total_supply": 0.1554600041521102,
+                    "percentage_of_circulating_supply": 0.16199954115720783
+                },
+                "0xab782bc7d4a2b306825de5a7730034f8f63ee1bc": {
+                    "balance": 65881113986780,
+                    "percentage_of_total_supply": 0.1550143865807261,
+                    "percentage_of_circulating_supply": 0.161535178361841
+                },
+                "0x0d0707963952f2fba59dd06f2b425ace40b492fe": {
+                    "balance": 62436420098956,
+                    "percentage_of_total_supply": 0.14690922445358656,
+                    "percentage_of_circulating_supply": 0.1530890667541464
+                },
+                "0xc89b84a9bb8f6ac0a8c3a87e7c398039ba0e343e": {
+                    "balance": 62303347983174,
+                    "percentage_of_total_supply": 0.14659611359144956,
+                    "percentage_of_circulating_supply": 0.15276278465815535
+                },
+                "0xee672576413977371d96a08aad399df3ef33051e": {
+                    "balance": 57848704000000,
+                    "percentage_of_total_supply": 0.13611459828759775,
+                    "percentage_of_circulating_supply": 0.1418403568664075
+                },
+                "0x22463ad5f36b0a2b78cf2dd70758d5960848c745": {
+                    "balance": 56872494776516,
+                    "percentage_of_total_supply": 0.13381763539800265,
+                    "percentage_of_circulating_supply": 0.13944677057905958
+                },
+                "0xaef16913b6c50ebcf627a394921f306985fc8604": {
+                    "balance": 51872230352043,
+                    "percentage_of_total_supply": 0.12205230728505288,
+                    "percentage_of_circulating_supply": 0.12718652546806014
+                },
+                "0xa89a1278ac85367f38bdf6746658ce2b9875526e": {
+                    "balance": 50580727582421,
+                    "percentage_of_total_supply": 0.11901347722458311,
+                    "percentage_of_circulating_supply": 0.124019864833154
+                },
+                "0xd7807de090f02e268f17ff8cea3401fcdcbeac3a": {
+                    "balance": 50073904429988,
+                    "percentage_of_total_supply": 0.11782095215442298,
+                    "percentage_of_circulating_supply": 0.12277717533730542
+                },
+                "0xa891b11ad4a26def2d9ac79d7f8b712dfce0668a": {
+                    "balance": 50000000000000,
+                    "percentage_of_total_supply": 0.11764705937716233,
+                    "percentage_of_circulating_supply": 0.12259596763516732
+                },
+                "0x54726533d9500900b56356adb0bc861dda23fe13": {
+                    "balance": 49219980133232,
+                    "percentage_of_total_supply": 0.11581171850554191,
+                    "percentage_of_circulating_supply": 0.1206834218283458
+                },
+                "0xc527f8cdb9f8795c418536c539999f49c352778b": {
+                    "balance": 48673946880000,
+                    "percentage_of_total_supply": 0.11452693437424409,
+                    "percentage_of_circulating_supply": 0.11934459232752669
+                },
+                "0x855c9a32f334e41b942119b64d0ebd5a074595bb": {
+                    "balance": 47507486000000,
+                    "percentage_of_total_supply": 0.11178232052603415,
+                    "percentage_of_circulating_supply": 0.1164845243216833
+                },
+                "0x47fa52ec9b31c9721d86fd4eebdfe64701283b10": {
+                    "balance": 46020166900009,
+                    "percentage_of_total_supply": 0.10828274615664558,
+                    "percentage_of_circulating_supply": 0.11283773783677005
+                },
+                "0x0529ea5885702715e83923c59746ae8734c553b7": {
+                    "balance": 45512446724575,
+                    "percentage_of_total_supply": 0.10708811044412023,
+                    "percentage_of_circulating_supply": 0.11159284891286549
+                },
+                "0xbed1eb542f9a5aa6419ff3deb921a372681111f6": {
+                    "balance": 45121870814488,
+                    "percentage_of_total_supply": 0.10616910829841435,
+                    "percentage_of_circulating_supply": 0.11063518828022345
+                },
+                "0x7793cd85c11a924478d358d49b05b37e91b5810f": {
+                    "balance": 40891335756412,
+                    "percentage_of_total_supply": 0.09621490811492167,
+                    "percentage_of_circulating_supply": 0.10026225749903692
+                },
+                "0x29065a4c1f2f20d1e263930088890d6f49fe715a": {
+                    "balance": 40817927000000,
+                    "percentage_of_total_supply": 0.09604218162843355,
+                    "percentage_of_circulating_supply": 0.10008226514853247
+                },
+                "0x941b4fdb4b1533ab2cc8b90ff0700f658b4aa642": {
+                    "balance": 40805437961697,
+                    "percentage_of_total_supply": 0.0960127956558176,
+                    "percentage_of_circulating_supply": 0.10005164303382068
+                },
+                "0x88a445fc2623cd9b1f24390da1e8bc7d4fb49586": {
+                    "balance": 40310161269447,
+                    "percentage_of_total_supply": 0.0948474387273924,
+                    "percentage_of_circulating_supply": 0.09883726452715
+                },
+                "0xdcc4802ded5b11d4bcb40934896de13f7bf84c86": {
+                    "balance": 40000000000000,
+                    "percentage_of_total_supply": 0.09411764750172985,
+                    "percentage_of_circulating_supply": 0.09807677410813387
+                },
+                "0xb51bf9029d778899d42e96ebcdc0498bd061006d": {
+                    "balance": 39524776709657,
+                    "percentage_of_total_supply": 0.09299947504860198,
+                    "percentage_of_circulating_supply": 0.0969115649256865
+                },
+                "0xf82d3281fb0ee77aff85011ed1910001fcc4a9cb": {
+                    "balance": 38704143478026,
+                    "percentage_of_total_supply": 0.09106857331803069,
+                    "percentage_of_circulating_supply": 0.09489943842357897
+                },
+                "0x4c4408576d2c32e071df02453a0dada3060d9d8a": {
+                    "balance": 37882361037379,
+                    "percentage_of_total_supply": 0.08913496756623256,
+                    "percentage_of_circulating_supply": 0.09288449415364479
+                },
+                "0x5f26ba2d4afacdd6cc79a87228fcb0f90f8e6e78": {
+                    "balance": 37329631704525,
+                    "percentage_of_total_supply": 0.08783442795339708,
+                    "percentage_of_circulating_supply": 0.09152924640561326
+                },
+                "0xc095e413dbdfa46be1dbac8e5fd8398e942f02d6": {
+                    "balance": 35258853748100,
+                    "percentage_of_total_supply": 0.08296200920946806,
+                    "percentage_of_circulating_supply": 0.08645186585910332
+                },
+                "0xf35a6bd6e0459a4b53a27862c51a2a7292b383d1": {
+                    "balance": 34897661000000,
+                    "percentage_of_total_supply": 0.08211214391582164,
+                    "percentage_of_circulating_supply": 0.08556625036998083
+                },
+                "0x476ce1918043db66c968f5e931a98a996e8a7692": {
+                    "balance": 34804111282468,
+                    "percentage_of_total_supply": 0.08189202693235756,
+                    "percentage_of_circulating_supply": 0.08533687400712418
+                },
+                "0x248695d0e9ef27d24f493b0989fa74d482fc92e5": {
+                    "balance": 34217089188334,
+                    "percentage_of_total_supply": 0.08051079846907179,
+                    "percentage_of_circulating_supply": 0.08389754317405258
+                },
+                "0x98adef6f2ac8572ec48965509d69a8dd5e8bba9d": {
+                    "balance": 33207704516150,
+                    "percentage_of_total_supply": 0.07813577569981521,
+                    "percentage_of_circulating_supply": 0.08142261336200252
+                },
+                "0x0c501d43206b97fa4300f1b0962742b4f938f70e": {
+                    "balance": 32649118711169,
+                    "percentage_of_total_supply": 0.07682145615249841,
+                    "percentage_of_circulating_supply": 0.08005300601662421
+                },
+                "0x970c30ce9a60bdbbc5d438f73e27a24cc7ec4ac4": {
+                    "balance": 31643967605972,
+                    "percentage_of_total_supply": 0.07445639471737578,
+                    "percentage_of_circulating_supply": 0.07758845656940053
+                },
+                "0x655bd1215522c05036452370b4c467ae1a22077c": {
+                    "balance": 31613919643373,
+                    "percentage_of_total_supply": 0.07438569362857483,
+                    "percentage_of_circulating_supply": 0.07751478138839474
+                },
+                "0x72f6574a8c2a22dbb300fba453dc2705bc3e9077": {
+                    "balance": 31429750000000,
+                    "percentage_of_total_supply": 0.07395235328918735,
+                    "percentage_of_circulating_supply": 0.07706321227562801
+                },
+                "0x6f323854495fed0d8ea0717b786f8d9cb94ec322": {
+                    "balance": 31251060929419,
+                    "percentage_of_total_supply": 0.07353190841525349,
+                    "percentage_of_circulating_supply": 0.07662508108535389
+                },
+                "0x1db7f01cf9fafcdc5b8ef93337aa9091ac731d62": {
+                    "balance": 30425636069144,
+                    "percentage_of_total_supply": 0.07158973226429032,
+                    "percentage_of_circulating_supply": 0.07460120589624315
+                },
+                "0xf4c62f436b0c5e99746de83047a1f00ed60c441d": {
+                    "balance": 30148912085335,
+                    "percentage_of_total_supply": 0.07093861700520507,
+                    "percentage_of_circulating_supply": 0.0739227010049847
+                },
+                "0x9262679feb838a9dc4de702d9751b1432e5d7d93": {
+                    "balance": 30000000000000,
+                    "percentage_of_total_supply": 0.07058823562629739,
+                    "percentage_of_circulating_supply": 0.0735575805811004
+                },
+                "0xf60c2ea62edbfe808163751dd0d8693dcb30019c": {
+                    "balance": 29969957822040,
+                    "percentage_of_total_supply": 0.07051754814841181,
+                    "percentage_of_circulating_supply": 0.07348391958356293
+                },
+                "0xb0a3a2b60e969afd26561429aa4c1444c57e4411": {
+                    "balance": 28999988660000,
+                    "percentage_of_total_supply": 0.06823526775640107,
+                    "percentage_of_circulating_supply": 0.0711056334236316
+                },
+                "0xba2d0c7cfc128a3ffad2fdee86fdc593a5edbe39": {
+                    "balance": 28928100000000,
+                    "percentage_of_total_supply": 0.06806611796736979,
+                    "percentage_of_circulating_supply": 0.07092936822693768
+                },
+                "0x84653c310cefb75593a16c2e794ca21fed8a68e7": {
+                    "balance": 28769279496253,
+                    "percentage_of_total_supply": 0.06769242266267711,
+                    "percentage_of_circulating_supply": 0.07053995316019432
+                },
+                "0xabea9132b05a70803a4e85094fd0e1800777fbef": {
+                    "balance": 28686782412491,
+                    "percentage_of_total_supply": 0.06749831187644129,
+                    "percentage_of_circulating_supply": 0.07033767696397668
+                },
+                "0x52d940e1bfa8ea199ce9ae5d150950a6930ff8d6": {
+                    "balance": 28325822300000,
+                    "percentage_of_total_supply": 0.06664899396070098,
+                    "percentage_of_circulating_supply": 0.06945263187860602
+                },
+                "0x5b71d5fd6bb118665582dd87922bf3b9de6c75f9": {
+                    "balance": 27984625189433,
+                    "percentage_of_total_supply": 0.06584617722617712,
+                    "percentage_of_circulating_supply": 0.06861604408012033
+                },
+                "0xad466d56e5c1fbf092f5b3e1f5a3887d301a9386": {
+                    "balance": 27961074720000,
+                    "percentage_of_total_supply": 0.06579076435666226,
+                    "percentage_of_circulating_supply": 0.06855830022835231
+                },
+                "0xc3dcd744db3f114f0edf03682b807b78a227bf74": {
+                    "balance": 27585197176000,
+                    "percentage_of_total_supply": 0.06490634660191205,
+                    "percentage_of_circulating_supply": 0.0676366788039721
+                },
+                "0x86b8e02e30703d18b7ceab2aba6fbd4a7e134d94": {
+                    "balance": 26891053000000,
+                    "percentage_of_total_supply": 0.06327306618010839,
+                    "percentage_of_circulating_supply": 0.06593469326527139
+                },
+                "0x4d2cac5db16584e117c53eac0b32b01ee773b960": {
+                    "balance": 26063900000000,
+                    "percentage_of_total_supply": 0.06132682381800842,
+                    "percentage_of_circulating_supply": 0.06390658081692475
+                },
+                "0xe88966b94fc60dafb3e792b450ff1d1626027319": {
+                    "balance": 25000977819354,
+                    "percentage_of_total_supply": 0.05882583044001317,
+                    "percentage_of_circulating_supply": 0.06130038135178119
+                },
+                "0xcecfc852f8ce51d92a5a291f6999dee147bc2169": {
+                    "balance": 24777384051574,
+                    "percentage_of_total_supply": 0.05829972745452562,
+                    "percentage_of_circulating_supply": 0.060752147465417544
+                },
+                "0x0a1e2595ffdcc5794d228594ab739a4c12d289dd": {
+                    "balance": 24696297663094,
+                    "percentage_of_total_supply": 0.058108935951321904,
+                    "percentage_of_circulating_supply": 0.060553330180262606
+                },
+                "0x871979236d4d7d1293aa811f6ec84dde40f98ca6": {
+                    "balance": 24631901300000,
+                    "percentage_of_total_supply": 0.05795741509627004,
+                    "percentage_of_circulating_supply": 0.06039543549134872
+                },
+                "0x9a2bb21be1312b3b356fe2772a605e33091d98b9": {
+                    "balance": 23454393940278,
+                    "percentage_of_total_supply": 0.05518680953094485,
+                    "percentage_of_circulating_supply": 0.05750828240809573
+                },
+                "0x4bd5d115208e0b88906f8af12f6314bb62c2becf": {
+                    "balance": 23199161578251,
+                    "percentage_of_total_supply": 0.054586262793937565,
+                    "percentage_of_circulating_supply": 0.056882473240205546
+                },
+                "0xd367e507282cd1b461891bd86051f4cb6d10069b": {
+                    "balance": 22458932683188,
+                    "percentage_of_total_supply": 0.0528445477385342,
+                    "percentage_of_circulating_supply": 0.05506749168697035
+                },
+                "0xb75eb841f9685685452c1f53e7d5db1803c345f4": {
+                    "balance": 21999570000000,
+                    "percentage_of_total_supply": 0.05176369436124077,
+                    "percentage_of_circulating_supply": 0.05394117143415196
+                },
+                "0xc98061c50135ee3778528ff1deaf2d7d30d39801": {
+                    "balance": 21324239136305,
+                    "percentage_of_total_supply": 0.05017468055683366,
+                    "percentage_of_circulating_supply": 0.05228531461998032
+                },
+                "0x81a3ed4015405015fbd439bdba1daa3e09086fb8": {
+                    "balance": 21000000000000,
+                    "percentage_of_total_supply": 0.049411764938408174,
+                    "percentage_of_circulating_supply": 0.05149030640677028
+                },
+                "0x176f3dab24a159341c0509bb36b833e7fdd0a132": {
+                    "balance": 20238528506000,
+                    "percentage_of_total_supply": 0.04762006729703549,
+                    "percentage_of_circulating_supply": 0.04962323971409975
+                },
+                "0x548054687ef6c56c6d82e8269e5fd93d8b88fcb2": {
+                    "balance": 19993270979540,
+                    "percentage_of_total_supply": 0.047042990761472774,
+                    "percentage_of_circulating_supply": 0.04902188803857633
+                },
+                "0x088f0d85feb6de065aecf821660a566c0df349b8": {
+                    "balance": 19666733330000,
+                    "percentage_of_total_supply": 0.046274666876586545,
+                    "percentage_of_circulating_supply": 0.04822124405628293
+                },
+                "0x74e9701ac39857980c25abb2fcfd274e308479b2": {
+                    "balance": 19417700000000,
+                    "percentage_of_total_supply": 0.0456887060973585,
+                    "percentage_of_circulating_supply": 0.04761063441498777
+                },
+                "0xfc8bbe247c7caf288c7078fb667823b05eaecb56": {
+                    "balance": 19300829492673,
+                    "percentage_of_total_supply": 0.04541371666705972,
+                    "percentage_of_circulating_supply": 0.047324077356312444
+                },
+                "0x7f604d597c15b2e2f60dc645844f68b1d781b752": {
+                    "balance": 19274776128680,
+                    "percentage_of_total_supply": 0.04535241463384654,
+                    "percentage_of_circulating_supply": 0.04726019660893498
+                },
+                "0x8aff5ca996f77487a4f04f1ce905bf3d27455580": {
+                    "balance": 18885757100491,
+                    "percentage_of_total_supply": 0.04443707573968259,
+                    "percentage_of_circulating_supply": 0.04630635332514853
+                },
+                "0x167a9333bf582556f35bd4d16a7e80e191aa6476": {
+                    "balance": 18278826084409,
+                    "percentage_of_total_supply": 0.04300900275394578,
+                    "percentage_of_circulating_supply": 0.044818207421061164
+                },
+                "0x46340b20830761efd32832a74d7169b29feb9758": {
+                    "balance": 18251629990918,
+                    "percentage_of_total_supply": 0.04294501194543053,
+                    "percentage_of_circulating_supply": 0.04475152479311265
+                },
+                "0x158dc5576b18f9c556ac8ded5dc45119152658c2": {
+                    "balance": 18238656170399,
+                    "percentage_of_total_supply": 0.04291448530877158,
+                    "percentage_of_circulating_supply": 0.04471971403150361
+                },
+                "0x511101683b54b1d86443af45483345eeeb605eec": {
+                    "balance": 18008104879621,
+                    "percentage_of_total_supply": 0.042372011680858766,
+                    "percentage_of_circulating_supply": 0.0441544208598543
+                },
+                "0x2f05e96f086d271955eb688107a9cbae0b4ffc63": {
+                    "balance": 18001500000000,
+                    "percentage_of_total_supply": 0.042356470787559754,
+                    "percentage_of_circulating_supply": 0.044138226227689294
+                },
+                "0x26a83a3076877b641c668762968dc951f28eb59e": {
+                    "balance": 17900058400000,
+                    "percentage_of_total_supply": 0.04211778466878947,
+                    "percentage_of_circulating_supply": 0.0438894996054801
+                },
+                "0xf16e9b0d03470827a95cdfd0cb8a8a3b46969b91": {
+                    "balance": 17659619457480,
+                    "percentage_of_total_supply": 0.041552045977844815,
+                    "percentage_of_circulating_supply": 0.04329996270917179
+                },
+                "0x6f47b8d6e0269b1ed14e7736af0b447ea2a6ad18": {
+                    "balance": 17655129079773,
+                    "percentage_of_total_supply": 0.04154148038319039,
+                    "percentage_of_circulating_supply": 0.04328895266517105
+                },
+                "0x44bc8638dad653fa206e8ea90b6b7a0ce19ff121": {
+                    "balance": 17338766681495,
+                    "percentage_of_total_supply": 0.04079709826609212,
+                    "percentage_of_circulating_supply": 0.04251325757836557
+                },
+                "0x50e11ee6ecd5dc8f5cbd06951fca04c536e8fb24": {
+                    "balance": 17292474051620,
+                    "percentage_of_total_supply": 0.04068817443057954,
+                    "percentage_of_circulating_supply": 0.04239975178328753
+                },
+                "0x000000000004444c5dc75cb358380d2e3de08a90": {
+                    "balance": 17218389436402,
+                    "percentage_of_total_supply": 0.04051385768806982,
+                    "percentage_of_circulating_supply": 0.04221810228149694
+                },
+                "0xd61adedb23a98470b775f332cd3b714cd31baf85": {
+                    "balance": 17004702543676,
+                    "percentage_of_total_supply": 0.04001106499693667,
+                    "percentage_of_circulating_supply": 0.04169415925380301
+                },
+                "0x4f729128055bebf02010015562aab83c43a1eb0c": {
+                    "balance": 16905195181631,
+                    "percentage_of_total_supply": 0.039776930026317214,
+                    "percentage_of_circulating_supply": 0.04145017522706842
+                },
+                "0x41dcda60e3a29bffa1ba2523b1f9b5da48e96ca8": {
+                    "balance": 16587644087132,
+                    "percentage_of_total_supply": 0.03902975097692108,
+                    "percentage_of_circulating_supply": 0.04067156555299419
+                },
+                "0x708cf4a108c316237b4938df834b04446eef7b8c": {
+                    "balance": 16513841162969,
+                    "percentage_of_total_supply": 0.038856097036896825,
+                    "percentage_of_circulating_supply": 0.04049060673495283
+                },
+                "0xd6e8376a3a257c5d5a6160238e699ec5a089365e": {
+                    "balance": 16497926000000,
+                    "percentage_of_total_supply": 0.038818649594440605,
+                    "percentage_of_circulating_supply": 0.04045158403886771
+                },
+                "0x4936dffb8d8f4ec6a3200cad6da207188facb7a8": {
+                    "balance": 16332005000000,
+                    "percentage_of_total_supply": 0.03842824723966223,
+                    "percentage_of_circulating_supply": 0.04004475912794782
+                },
+                "0x4684ad99b1d3b8c87ea56651476194e19f492ba7": {
+                    "balance": 16200079000000,
+                    "percentage_of_total_supply": 0.03811783312055441,
+                    "percentage_of_circulating_supply": 0.03972128721542308
+                },
+                "0x1c727a55ea3c11b0ab7d3a361fe0f3c47ce6de5d": {
+                    "balance": 15486838892938,
+                    "percentage_of_total_supply": 0.03643962109604047,
+                    "percentage_of_circulating_supply": 0.03797247999379356
+                },
+                "0x216af2d7dfaa7d2345fcef441071f1bd94b767ae": {
+                    "balance": 15437574522944,
+                    "percentage_of_total_supply": 0.03632370493080322,
+                    "percentage_of_circulating_supply": 0.03785168773160653
+                },
+                "0xe40b3327b94a910127d282d2c9d85b444a3a67d5": {
+                    "balance": 14948858407960,
+                    "percentage_of_total_supply": 0.03517378465484124,
+                    "percentage_of_circulating_supply": 0.03665339523129926
+                },
+                "0x38f6d5fb32f970fe60924b282704899411126336": {
+                    "balance": 14826454353759,
+                    "percentage_of_total_supply": 0.034885775114189436,
+                    "percentage_of_circulating_supply": 0.03635327036195448
+                },
+                "0x2530ceff321206c0331379b69d565e6d60faba8c": {
+                    "balance": 14790113856283,
+                    "percentage_of_total_supply": 0.03480026806090234,
+                    "percentage_of_circulating_supply": 0.03626416639290621
+                },
+                "0x655fe3fc7764e621ca738254eb1b90fae3461d51": {
+                    "balance": 14563072300000,
+                    "percentage_of_total_supply": 0.034266052631840155,
+                    "percentage_of_circulating_supply": 0.03570747880718803
+                },
+                "0xd9eb1bb96c8c520fb41afcaadd720f15a7879b5c": {
+                    "balance": 14392491384812,
+                    "percentage_of_total_supply": 0.03386468577068549,
+                    "percentage_of_circulating_supply": 0.03528922816003673
+                },
+                "0xaeff220d376b75825d96c012c69a58f12d39af6a": {
+                    "balance": 14071326918735,
+                    "percentage_of_total_supply": 0.03310900467047758,
+                    "percentage_of_circulating_supply": 0.0345017587902619
+                },
+                "0xa6a8ccdd47f23fb31f6db9d3b665dc215de24592": {
+                    "balance": 14049316107892,
+                    "percentage_of_total_supply": 0.033057214527073865,
+                    "percentage_of_circulating_supply": 0.034447790057187254
+                },
+                "0x48bcd8abefd245db4264e3f6a54087e51859811b": {
+                    "balance": 13800000000000,
+                    "percentage_of_total_supply": 0.0324705883880968,
+                    "percentage_of_circulating_supply": 0.03383648706730618
+                },
+                "0xfa6a4f58031a3d52690a10b5306880f326262919": {
+                    "balance": 13724362612478,
+                    "percentage_of_total_supply": 0.032292618063678113,
+                    "percentage_of_circulating_supply": 0.033651030293053066
+                },
+                "0x3d5ff104ea3e76f7852393fd34c136b914b821bd": {
+                    "balance": 13442260285891,
+                    "percentage_of_total_supply": 0.03162884788034979,
+                    "percentage_of_circulating_supply": 0.03295933813905176
+                },
+                "0x8080e7a85d27000491478c59d274e02ef3a9b205": {
+                    "balance": 12852963631589,
+                    "percentage_of_total_supply": 0.03024226751076118,
+                    "percentage_of_circulating_supply": 0.031514430267885356
+                },
+                "0xd00486207705f54f4bac843769d0f6d12a4bf9d4": {
+                    "balance": 12694081654726,
+                    "percentage_of_total_supply": 0.02986842756344193,
+                    "percentage_of_circulating_supply": 0.031124864474019204
+                },
+                "0xe4cab5fc3db3ee273156e1f78fe73918ed436293": {
+                    "balance": 12585791361656,
+                    "percentage_of_total_supply": 0.029613626872666405,
+                    "percentage_of_circulating_supply": 0.030859345408730948
+                },
+                "0x4dcb301bbdee81c25d301827cccf13fb3ea96aff": {
+                    "balance": 12581843106571,
+                    "percentage_of_total_supply": 0.029604336860657977,
+                    "percentage_of_circulating_supply": 0.03084966460567863
+                },
+                "0xe8f44abc0c80eb4b1fd8dd65092b0da926e84fcc": {
+                    "balance": 12533215968826,
+                    "percentage_of_total_supply": 0.02948992006542543,
+                    "percentage_of_circulating_supply": 0.030730434785575092
+                },
+                "0x6d3480509c7ebb085ad750c877ed9a7b038bbbc4": {
+                    "balance": 12465082768240,
+                    "percentage_of_total_supply": 0.029329606651527486,
+                    "percentage_of_circulating_supply": 0.030563377672496662
+                },
+                "0x38b78904a6b44f63eb81d98937fc6614870cfbb9": {
+                    "balance": 12457573150327,
+                    "percentage_of_total_supply": 0.029311936962237273,
+                    "percentage_of_circulating_supply": 0.030544964695004367
+                },
+                "0x0cc32af321326ace106dcdf39c2f513b68b89d8c": {
+                    "balance": 12363000000000,
+                    "percentage_of_total_supply": 0.029089411901597154,
+                    "percentage_of_circulating_supply": 0.030313078957471474
+                },
+                "0x6e577a89d5af6038c25fdaab424c443fca8d56ad": {
+                    "balance": 12262309697151,
+                    "percentage_of_total_supply": 0.02885249354083754,
+                    "percentage_of_circulating_supply": 0.03006619445528645
+                },
+                "0xc225c6e350792d8ab4297af10290acbcec2a16bc": {
+                    "balance": 12186680972836,
+                    "percentage_of_total_supply": 0.028674543600435424,
+                    "percentage_of_circulating_supply": 0.029880758922518236
+                },
+                "0xab820fd821facd73f3a037ab9b5b0be05d21c0a8": {
+                    "balance": 12137084745604,
+                    "percentage_of_total_supply": 0.028557846594634496,
+                    "percentage_of_circulating_supply": 0.029759152973147022
+                },
+                "0x74c6cfc31e8c0eafe38cfc59930d00d06c3c1ce1": {
+                    "balance": 12009131200000,
+                    "percentage_of_total_supply": 0.028256779427090654,
+                    "percentage_of_circulating_supply": 0.029445421198433568
+                },
+                "0x51fa40c1d533e4e3561ae239bd9423068f175393": {
+                    "balance": 12003678397283,
+                    "percentage_of_total_supply": 0.028243949302990276,
+                    "percentage_of_circulating_supply": 0.02943205136592528
+                },
+                "0x4947b4544ab776a794eb9645c47c110f6e437aad": {
+                    "balance": 11998600000000,
+                    "percentage_of_total_supply": 0.028232000132856396,
+                    "percentage_of_circulating_supply": 0.029419599545346377
+                },
+                "0x6b75c6e3e5cabc573b8603a19e38ecacd98d93d0": {
+                    "balance": 11959651513429,
+                    "percentage_of_total_supply": 0.028140356634611015,
+                    "percentage_of_circulating_supply": 0.029324100997364433
+                },
+                "0xcd531ae9efcce479654c4926dec5f6209531ca7b": {
+                    "balance": 11914069886829,
+                    "percentage_of_total_supply": 0.02803310574798866,
+                    "percentage_of_circulating_supply": 0.0292123385249762
+                },
+                "0x0554ebe00716a615ef98b4a5b2ac6d4c90656368": {
+                    "balance": 11902734860833,
+                    "percentage_of_total_supply": 0.028006435098460798,
+                    "percentage_of_circulating_supply": 0.02918454595537321
+                },
+                "0xe9b7cc74fa16242c58d170c6d200615095dfc6c1": {
+                    "balance": 11859691075628,
+                    "percentage_of_total_supply": 0.02790515560338419,
+                    "percentage_of_circulating_supply": 0.029079006065415462
+                },
+                "0xf4b844cd7297a81f49881928b5bfe91ebda3ef53": {
+                    "balance": 11833041733602,
+                    "percentage_of_total_supply": 0.027842451268910287,
+                    "percentage_of_circulating_supply": 0.029013664027965104
+                },
+                "0x7ee4d837b5575d72415e16c5dfd164aea7fbbd62": {
+                    "balance": 11701752208601,
+                    "percentage_of_total_supply": 0.02753353473804244,
+                    "percentage_of_circulating_supply": 0.02869175270080792
+                },
+                "0xb64ef51c888972c908cfacf59b47c1afbc0ab8ac": {
+                    "balance": 11613387089937,
+                    "percentage_of_total_supply": 0.02732561681079577,
+                    "percentage_of_circulating_supply": 0.02847508855625173
+                },
+                "0xcefcd54daf77728cd2b797f9c5d1713932e11240": {
+                    "balance": 11589876362961,
+                    "percentage_of_total_supply": 0.027270297452944854,
+                    "percentage_of_circulating_supply": 0.028417442149783152
+                },
+                "0x165a1da6f4d3c0555a9e1f94288a7e17bd14f7d1": {
+                    "balance": 11557279723805,
+                    "percentage_of_total_supply": 0.02719359947809922,
+                    "percentage_of_circulating_supply": 0.028337517819403465
+                },
+                "0x2794e1d22411aca80ba470cec095ada3f743f335": {
+                    "balance": 11500336763312,
+                    "percentage_of_total_supply": 0.027059616041014596,
+                    "percentage_of_circulating_supply": 0.02819789827257046
+                },
+                "0x32702b2176e3ecfc39d7abac6630a452ad56ee61": {
+                    "balance": 11340578587349,
+                    "percentage_of_total_supply": 0.02668371444874447,
+                    "percentage_of_circulating_supply": 0.027806184109174195
+                },
+                "0x727993cda4de0221fc575728a710ba0636efc02f": {
+                    "balance": 11254247779155,
+                    "percentage_of_total_supply": 0.02648058313439091,
+                    "percentage_of_circulating_supply": 0.0275945079298288
+                },
+                "0x446b86a33e2a438f569b15855189e3da28d027ba": {
+                    "balance": 11156833807722,
+                    "percentage_of_total_supply": 0.026251373788764045,
+                    "percentage_of_circulating_supply": 0.027355656728048537
+                }
+            },
+            "total_supply": 42499999800000112,
+            "total_circulating_supply": 40784375672774757,
+            "owner": {},
+            "creator": {},
+            "holders_exceeding_5_percent": [
+                {
+                    "address": "0xcb1c98a7fbf4fde5f27db695434932a580b8d5b3",
+                    "balance": 14945620494315896,
+                    "percentage_of_supply": 36.6454561281729
+                },
+                {
+                    "address": "0xf977814e90da44bfa03b6295a0616a897441acec",
+                    "balance": 4700000000000000,
+                    "percentage_of_supply": 11.524020957705728
+                }
+            ],
+            "howmany_holders_exceeding_5_percent": 2,
+            "top_10_holders": [
+                {
+                    "address": "0xcb1c98a7fbf4fde5f27db695434932a580b8d5b3",
+                    "balance": 14945620494315896,
+                    "percentage_of_total_supply": 35.16616603446633,
+                    "percentage_of_circulating_supply": 36.6454561281729
+                },
+                {
+                    "address": "0xf977814e90da44bfa03b6295a0616a897441acec",
+                    "balance": 4700000000000000,
+                    "percentage_of_total_supply": 11.05882358145326,
+                    "percentage_of_circulating_supply": 11.524020957705728
+                },
+                {
+                    "address": "0x22af984f13dfb5c80145e3f9ee1050ae5a5fb651",
+                    "balance": 1254396269667448,
+                    "percentage_of_total_supply": 2.9515206484011434,
+                    "percentage_of_circulating_supply": 3.0756784895565015
+                },
+                {
+                    "address": "0x0f564a2a5fde73349890e86e9b2aa1639994bf2f",
+                    "balance": 1102661936508959,
+                    "percentage_of_total_supply": 2.5944986863481256,
+                    "percentage_of_circulating_supply": 2.7036381416156656
+                },
+                {
+                    "address": "0x06b93279249ec9c4e3d36f6e38d74a2744e618af",
+                    "balance": 965623226406574,
+                    "percentage_of_total_supply": 2.2720546610604253,
+                    "percentage_of_circulating_supply": 2.367630276246124
+                },
+                {
+                    "address": "0x073f564419b625a45d8aea3bb0de4d5647113ad7",
+                    "balance": 613297195000000,
+                    "percentage_of_total_supply": 1.443052230320242,
+                    "percentage_of_circulating_supply": 1.5037552613791783
+                },
+                {
+                    "address": "0x28c6c06298d514db089934071355e5743bf21d60",
+                    "balance": 593873884532030,
+                    "percentage_of_total_supply": 1.3973503231217155,
+                    "percentage_of_circulating_supply": 1.456130870549197
+                },
+                {
+                    "address": "0x76ec5a0d3632b2133d9f1980903305b62678fbd3",
+                    "balance": 518620724768811,
+                    "percentage_of_total_supply": 1.2202840640220654,
+                    "percentage_of_circulating_supply": 1.2716161917736837
+                },
+                {
+                    "address": "0x1f65f567d4d9768a984a82793a4e907b5d513259",
+                    "balance": 484111407760000,
+                    "percentage_of_total_supply": 1.1390856706780472,
+                    "percentage_of_circulating_supply": 1.187002129551205
+                },
+                {
+                    "address": "0x40a8a8f85dde358ec7fc6623f7fc6cb41d6501a2",
+                    "balance": 453906273381854,
+                    "percentage_of_total_supply": 1.068014765924429,
+                    "percentage_of_circulating_supply": 1.1129415760184236
+                }
+            ],
+            "total_top_10_balance": 25632111412341572,
+            "top10_percentage_of_total_supply": 60.310850665795776,
+            "top10_percentage_of_circulating_supply": 62.84787002256861,
+            "top_10_less_than_70_percent_of_total": true,
+            "top_10_less_than_70_percent_of_circulating": true
+        },
+        "liquidity": {
+            "price_usd": null,
+            "liquidity_usd": null,
+            "market_cap_usd": null,
+            "liquidity_to_market_cap_ratio": null,
+            "token_volume": null,
+            "volume_usd": null,
+            "volume_to_liquidity_ratio": null,
+            "locked_liquidity_percent": null,
+            "locked_95_for_15_days": null,
+            "creator_under_5_percent": null,
+            "creator_percent_of_lp": null,
+            "owner_under_5_percent": null,
+            "owner_percent_of_lp": null,
+            "total_lp_supply": null,
+            "lp_holders_count": null,
+            "lp_holders": null,
+            "error": "Exception during liquidity analysis in liquidity_analysis: 'tuple' object has no attribute 'get'"
+        },
+        "security": {
+            "warnings": [],
+            "homany_warnings": 0,
+            "suspicious_urls": {
+                "https://github.com/ethereum/EIPs/issues/20": "metamask recovery phrase phishing",
+                "https://github.com/Firstbloodio/token/blob/master/smart_contract/FirstBloodToken.sol": "metamask recovery phrase phishing",
+                "http://vessenes.com/the-erc20-short-address-attack-explained/": "metamask recovery phrase phishing",
+                "https://github.com/ethereum/EIPs/issues/20#issuecomment-263524729": "metamask recovery phrase phishing"
+            },
+            "howmany_suspicious_urls": 4,
+            "suspicious_addresses": {},
+            "howmany_suspicious_addresses": 0,
+            "howmany_warnings": 0
+        },
+        "lifecycle": {
+            "token_age_seconds": 257538525.931567,
+            "token_creation_date": "2017-06-19T18:16:35",
+            "creation_to_first_trade_seconds": 0.0,
+            "creation_to_first_trade_blocks": 0,
+            "last_tx_hash": "0x21a610f5b5f263e365466664a8b911067fb011554ca891086215a2f644ece43b",
+            "last_active_age": "2025-08-17T12:42:59",
+            "inactive_days": 0.0016700336458333334
+        }
+    },
+    "errors": []
+}

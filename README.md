@@ -1,6 +1,12 @@
 # Thesis
 
 
+# TODO
+Scrivi la procedura che hai usato per implementare tutte le metriche -> crea un nuovo documento o aggiorna quello precedente
+Rifare snippet analysis sui contratti -> troppe keyword, troppo generiche. Magari facciamo l'analisi prendendo direttamente f
+distribuzioni cumulative CDF
+
+
 
 ## Getting started
 

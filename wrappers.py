@@ -144,7 +144,7 @@ def security_analysis(token_address: str, chain: str, results: dict, report_line
             pbar.update(5)
     return results, report_lines
 
-def liquidity_analysis(token_address: str, chain: str, results: dict, report_lines: list, web3, pbar=None):
+def liquidity_analysis(token_address: str, chain: str, results: dict, report_lines: list, web3,pbar=None):
     print("\n🔍 Running liquidity analysis...")
     results['analyses']['liquidity'] = {
             'price_usd': None,
@@ -172,8 +172,8 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
         liquidity = None
         creation = None
         if data:
-            price = data.get('price_usd')
-            liquidity = data.get('liquidity_usd')
+            price = data[0]
+            liquidity = data[1]
             dexscreenerok = True
         else:
             dexscreenerok = False
@@ -270,7 +270,6 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
         owner = results["analyses"]["contract"].get("owner",utils.get_owner(token_address, chain))
         #owner_lp_balance = lp_address.functions.balanceOf(owner).call()
         creator = results["analyses"]["contract"].get("creator",utils.get_creator(token_address, chain))
-        
         results['analyses']['liquidity'] = {
             'price_usd': price,
             'liquidity_usd': liquidity,
@@ -391,7 +390,6 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
                     creation_block = int(creation["blocknum"]) if creation else None
                     last_tx = utils.get_latest_tx(token_address,chain)
                     last_block = int(last_tx['blockNumber']) if last_tx else None
-                    
                     holders_list = utils.get_unique_token_holders_web3(token_address,chain,web3,abi,creation_block,last_block) if creation_block and last_block and abi else None
                     if holders_list == None:
                         error_msg = "Failed to retrieve holders data."
@@ -469,8 +467,8 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
                 'balance': balance,
                 # 'age': age,
                 # 'age_readable': age_readable,
-                'percentage_of_total_supply': balance / total_supply * 100,
-                'percentage_of_circulating_supply': balance / total_c_supply * 100
+                'percentage_of_total_supply': balance / total_supply * 100 if total_supply else 0.0,
+                'percentage_of_circulating_supply': balance / total_c_supply * 100 if total_c_supply else 0.0
             }
 
 
