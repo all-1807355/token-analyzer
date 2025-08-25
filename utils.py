@@ -104,7 +104,6 @@ def get_contract_info(contract_address: str, chain: str) -> dict:
     result = res['result'][0]
     abi = result.get('ABI', '')
     is_verified = abi != 'Contract source code not verified'
-
     if not is_verified:
         debug_print(f"❌ Contract at {contract_address} is not verified.")
         info = {
@@ -455,7 +454,7 @@ def get_token_balance_web3(address: str, token: str, web3: config.Web3, abi: lis
     try:
         contract = web3.eth.contract(address=config.Web3.to_checksum_address(token), abi=abi)
         balance = contract.functions.balanceOf(config.Web3.to_checksum_address(address)).call()
-        return float(balance) if balance else None
+        return float(balance)
     except Exception as e:
         print(f"⚠️ Error fetching balance for {address}: {e}")
         return None
@@ -746,7 +745,6 @@ def get_owner(token_address,web3):
         "stateMutability": "view",
         "type": "function"
     }]
-
     try:
         token_address = web3.to_checksum_address(token_address)
         contract = web3.eth.contract(address=token_address, abi=owner_abi)
@@ -861,7 +859,7 @@ def owner_circulating_supply_analysis(token,chain,owner,total_c_supply,web3: con
 
     return owner_percentage,owner_flag
 
-def holder_circulating_supply_analysis(holders,total_c_supply,owner,creator):
+def holder_circulating_supply_analysis(holders,total_c_supply,owner,creator,decimals):
     """
     returns
     Owner/creator wallet contains < 5% of circulating token supply
@@ -895,7 +893,7 @@ def holder_circulating_supply_analysis(holders,total_c_supply,owner,creator):
         if percentage > 5:
             flagged_holders.append({
                 'address': holder,
-                'balance': balance,
+                'balance': balance / (10**decimals),
                 'percentage_of_supply': percentage
             })
 
@@ -910,7 +908,7 @@ def holder_circulating_supply_analysis(holders,total_c_supply,owner,creator):
 
     return result
 
-def top10_analysis(holders: dict, total_supply,total_circulating):
+def top10_analysis(holders: dict, total_supply,total_circulating,decimals):
     """
     Returns a dictionary with:
     - top_10 holders (address, balance, percentage of supply)
@@ -946,7 +944,7 @@ def top10_analysis(holders: dict, total_supply,total_circulating):
         percentage_tot = (balance / total_supply) * 100 if total_supply else 0.0
         top_10_data.append({
             'address': addr,
-            'balance': balance,
+            'balance': balance / (10**decimals),
             'percentage_of_total_supply': percentage_tot,
             'percentage_of_circulating_supply': percentage_circ
         })
@@ -1306,7 +1304,7 @@ def analyze_lp_security(token: str, chain: str = 'bsc') -> config.Dict:
                 "address": holder.get("address"),
                 "balance": float(holder.get("balance") or 0.0),
                 "is_locked": bool(holder.get("is_locked")),
-                "percent": float(holder.get("percent") or 0.0),
+                "percent": float(holder.get("percent") or 0.0) * 100,
                 "tag": holder.get("tag") or ""
             }
             for holder in lp_holders
@@ -1502,7 +1500,7 @@ def find_lockers_by_methods(token: str, chain: str, addresses: set[str]) -> set[
     lockers = set()
 
     # Load known selectors as dict: selector -> method name
-    with open("/home/amedeo/Desktop/code_tests/data/4bytes-master/locking_selectors_inverted.json", "r") as f:
+    with open("data/locking_selectors_inverted.json", "r", encoding="utf-8", errors="replace") as f:
         selector_to_method = config.json.load(f)  # dict: e.g. { "0xa9059cbb": "transfer(address,uint256)" }
 
     # Get contract creation info
@@ -1746,28 +1744,52 @@ def extract_all_functions(source_code: str):
     brace_count = 0
     current_function = []
 
-    lines = source_code.splitlines()
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("function"):
-            inside_function = True
-            brace_count = 0
-            current_function = [line]
-            brace_count += line.count("{") - line.count("}")
-            continue
-        elif inside_function:
-            current_function.append(line)
-            brace_count += line.count("{") - line.count("}")
-            if brace_count <= 0:
-                inside_function = False
-                functions.append("\n".join(current_function))
+    # Load the JSON source code (expecting string with files and their content)
+    json_code = config.json.loads(source_code)
 
+    # Extract simplified file-content mapping
+    simplified_contracts = {
+        filename: file_data['content']
+        for filename, file_data in json_code.items()
+    }
+
+    # Regex pattern to detect function start
+    function_start_pattern = config.re.compile(
+        r'\bfunction\b\s+[\w\d_]+\s*\([^)]*\)\s*(public|private|internal|external)?[\s\w]*\{',
+        config.re.MULTILINE
+    )
+
+    for filename, code in simplified_contracts.items():
+        lines = code.splitlines()
+
+        for line in lines:
+            stripped = line.strip()
+
+            # If not already inside a function, check for start
+            if not inside_function:
+                if function_start_pattern.search(stripped):
+                    inside_function = True
+                    brace_count = stripped.count('{') - stripped.count('}')
+                    current_function = [line]
+                    # If function ends on same line
+                    if brace_count == 0:
+                        functions.append('\n'.join(current_function))
+                        inside_function = False
+            else:
+                # Already inside a function
+                current_function.append(line)
+                brace_count += line.count('{') - line.count('}')
+                if brace_count == 0:
+                    # Function ends here
+                    functions.append('\n'.join(current_function))
+                    inside_function = False
     return functions
 
 def analyze_token_contract_with_snippets(source_code: str, pbar=None) -> dict:
     findings = {}
-    normalized_code = source_code.lower()
-    funcs = extract_all_functions(normalized_code)
+    funcs = extract_all_functions(source_code)
+    breakpoint()
+    normalized_funcs = [(f, f.lower()) for f in funcs]
 
     malicious_patterns = {
         'honeypot_mechanics': [
@@ -1886,28 +1908,22 @@ def analyze_token_contract_with_snippets(source_code: str, pbar=None) -> dict:
     results = {}
     total_matches = 0
 
+
     for category, patterns in malicious_patterns.items():
         matching_snippets = []
-        
+
         for pattern in patterns:
-            matches = config.re.finditer(pattern, normalized_code, config.re.IGNORECASE)
-            
-            for match in matches:
-                containing_func = next(
-                    (f for f in funcs if match.start() in range(
-                        normalized_code.index(f.lower()), 
-                        normalized_code.index(f.lower()) + len(f)
-                    )),
-                    None
-                )
-                
-                if containing_func:
-                    matching_snippets.append({
+            regex = config.re.compile(pattern, config.re.IGNORECASE)
+
+            for original_func, normalized_func in normalized_funcs:
+                for match in regex.finditer(normalized_func):
+                    snippet = {
                         'matched_code': match.group(),
-                        'function_context': containing_func,
+                        'function_context': original_func,
                         'pattern': pattern
-                    })
-        
+                    }
+                    matching_snippets.append(snippet)
+
         if matching_snippets:
             results[category] = {
                 'count': len(matching_snippets),
@@ -2264,18 +2280,17 @@ def run_security_checks(token, chain,source_code):
     "implementation": implementation_address,
     "abi": abi
     """
-
-    with open("/home/amedeo/Desktop/code_tests/data/addresses-darklist.json") as f:
+    with open("data/addresses-darklist.json", encoding="utf-8", errors="replace") as f:
         address_blacklist = config.json.load(f)
 
-    with open("/home/amedeo/Desktop/code_tests/data/urls-darklist.json") as f:
+    with open("data/urls-darklist.json", encoding="utf-8", errors="replace") as f:
         url_blacklist = config.json.load(f)
 
     if chain == 'bsc':
-        with open("/home/amedeo/Desktop/code_tests/data/bsc-blacklist.json") as f:
+        with open("data/bsc-blacklist.json", encoding="utf-8", errors="replace") as f:
             scammers_blacklist = config.json.load(f)
     elif chain == 'eth':
-        with open("/home/amedeo/Desktop/code_tests/data/ethereum-blacklist.json") as f:
+        with open("data/ethereum-blacklist.json", encoding="utf-8", errors="replace") as f:
             scammers_blacklist = config.json.load(f)
     
     lowtoken = token.lower()
@@ -2299,7 +2314,7 @@ def run_security_checks(token, chain,source_code):
     urls = config.re.findall(r'https?://[^\s"\'<>]+', source_code,config.re.IGNORECASE)
     for blacklisted in url_blacklist:
         for found_url in urls:
-            if blacklisted["id"] == found_url:
+            if blacklisted["id"] in found_url:
                 print("Found URL inside the contract (known to be fake, malicious or a phishing url):", found_url)
                 print("   → URL:", found_url)
                 print("   → Reason:", blacklisted["comment"])
@@ -2705,7 +2720,7 @@ def analyze_token(token_address: str, chain: str, analysis_types: list = None) -
     with open(report_filename, 'w',encoding='utf-8') as f:
         f.write(report)
     
-    with open(json_filename, 'w') as f:
+    with open(json_filename, 'w', encoding="utf-8") as f:
         config.json.dump(results, f, indent=4)
 
     print(f"\n✅ Analysis complete!")

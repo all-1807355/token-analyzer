@@ -92,7 +92,10 @@ def security_analysis(token_address: str, chain: str, results: dict, report_line
     report_lines.append("\nSecurity Analysis\n-----------------\n")
     try:
         source_code = results['analyses']['contract'].get('source_code')
-        security_report = utils.run_security_checks(token_address, chain,source_code) if source_code != None else None
+        if not source_code:
+            contract_info = utils.get_contract_info(token_address, chain)
+            source_code = contract_info.get('source_code')
+        security_report = utils.run_security_checks(token_address, chain,source_code) if source_code else None
         if not security_report:
             error_msg = "Security analysis data not available."
             results.setdefault('analyses', {}).setdefault('security', {})['error'] = error_msg
@@ -415,21 +418,22 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
             total_c_supply = utils.get_circulating_supply_estimate(token_address, chain, total_supply, holders_list)
         else: 
             total_c_supply = total_supply
-
         owner = results['analyses']['contract'].get('owner')
         creator = results['analyses']['contract'].get('creator')
-        if owner == None:
-            owner = utils.get_owner(token_address,web3)
-            if creator == None:
-                creator = utils.get_creator(token_address,chain)
-        if owner is not None:
-            owner_percentage,owner_flag = utils.owner_circulating_supply_analysis(token_address,chain,owner,total_c_supply,web3,abi)
+        owner = owner or utils.get_owner(token_address, web3)
+        creator = creator or utils.get_creator(token_address, chain)
+        owner_percentage = owner_flag = None
+        creator_percentage = creator_flag = None
+        if owner:
+            owner_percentage, owner_flag = utils.owner_circulating_supply_analysis(token_address, chain, owner, total_c_supply, web3, abi)
 
-        if creator is not None:
-            creator_percentage,creator_flag = utils.owner_circulating_supply_analysis(token_address,chain,creator,total_c_supply,web3,abi)
-
+        if creator:
+            if creator == owner:
+                creator_percentage, creator_flag = owner_percentage, owner_flag
+            else:
+                creator_percentage, creator_flag = utils.owner_circulating_supply_analysis(token_address, chain, creator, total_c_supply, web3, abi)
         
-        holder_analysis_results = utils.holder_circulating_supply_analysis(holders_list, total_c_supply,owner,creator)
+        holder_analysis_results = utils.holder_circulating_supply_analysis(holders_list, total_c_supply,owner,creator,decimals)
         #     result = {
         #     'flagged_holders': flagged_holders,
         #     'summary': {
@@ -438,7 +442,7 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
         #         'compliant': len(flagged_holders) == 0
         #     }
         # }
-        top10_analysis_results = utils.top10_analysis(holders_list,total_supply, total_c_supply)
+        top10_analysis_results = utils.top10_analysis(holders_list,total_supply, total_c_supply,decimals)
         #     result = {
         #     'top_10_holders': top_10_data,
         #     'totals': {

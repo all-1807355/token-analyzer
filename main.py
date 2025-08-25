@@ -128,7 +128,7 @@ def analyze_token(token_address: str, chain: str,analysis_types: list = None) ->
     with open(report_filename, 'w', encoding='utf-8') as f:
         f.write(report)
 
-    with open(json_filename, 'w') as f:
+    with open(json_filename, 'w',  encoding="utf-8") as f:
         config.json.dump(results, f, indent=4)
 
     print(f"\n✅ Analysis complete!")
@@ -4358,15 +4358,15 @@ def main():
 
     #609 contracts of the previously analyzed "good" contracts are on coingecko -> 123 eth, 486 bsc    
     #added 1391 more to reach the 2000 mark: they're split between 1000 on eth and 1000 on bsc
-    
-    count = 0
+
+    # count = 0
     for token, chain in config.tqdm(toanalyze.items(), desc="Analyzing tokens"):
-        if count >= 1:
-            break
+        # if count >= 15:
+        #     break
         start = config.time.perf_counter()
         analyze_token(token, chain)
         end = config.time.perf_counter()
-        count += 1
+        # count += 1
         print(f"Execution time: {end - start:.4f} seconds")
     return
 
