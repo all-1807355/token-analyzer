@@ -12,6 +12,7 @@ from typing import Union, Dict
 from decimal import Decimal
 from web3 import Web3
 from datetime import datetime
+from datetime import timezone
 from datetime import timedelta
 from moralis import evm_api
 from eth_utils import keccak
