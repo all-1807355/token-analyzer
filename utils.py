@@ -436,7 +436,7 @@ def get_token_balance_API(token,account,chain):
     res = api_call(params,chain)
     return float(res['result']) if res['result'] else None
 
-def get_token_balance_web3(address: str, token: str, web3: config.Web3, abi: list) -> int:
+def get_token_balance_web3(address: str, token: str, web3: config.Web3, abi: list) -> float:
     """
     Retrieves the balance of `address` for an ERC-20 `token` using `web3.py`.
     """
@@ -451,12 +451,20 @@ def get_token_balance_web3(address: str, token: str, web3: config.Web3, abi: lis
             }
         ]
 
+
     try:
         contract = web3.eth.contract(address=config.Web3.to_checksum_address(token), abi=abi)
-        balance = contract.functions.balanceOf(config.Web3.to_checksum_address(address)).call()
+
+        # Check if balanceOf exists in the ABI
+        if not hasattr(contract.functions, "balanceOf"):
+            return None
+
+        # Try to call balanceOf
+        balance = contract.functions.balanceOf(
+            config.Web3.to_checksum_address(address)
+        ).call()
         return float(balance)
-    except Exception as e:
-        print(f"⚠️ Error fetching balance for {address}: {e}")
+    except Exception:
         return None
 
 def get_latest_block(chain):
@@ -853,6 +861,11 @@ def get_token_decimals(token_address: str, web3: config.Web3, fallback_decimals:
 def owner_circulating_supply_analysis(token,chain,owner,total_c_supply,web3: config.Web3,abi):
     debug_print(f"Owner/creator address: {owner}")
     owner_balance = get_token_balance_web3(owner, token, web3,abi)
+    if not owner_balance:
+        owner_balance = get_token_balance_API(token,owner,chain)
+        if not owner_balance:
+            owner_percentage,owner_flag = None,None
+            return owner_percentage,owner_flag
     owner_percentage = (owner_balance / total_c_supply) * 100 if total_c_supply else 0.0
 
     owner_flag = owner_percentage > 5
@@ -873,9 +886,9 @@ def holder_circulating_supply_analysis(holders,total_c_supply,owner,creator,deci
     #return
     #holders = get_unique_token_holders_moralis(token,chain)
     #holders = get_token_holders_moralis(token)
-    debug_print(f"Analyzing {len(holders)} unique holders...")
+    # debug_print(f"Analyzing {len(holders)} unique holders...")
     flagged_holders = []
-    if holders == None:
+    if not holders:
         result = {
             'flagged_holders': None,
             'summary': {
@@ -919,7 +932,7 @@ def top10_analysis(holders: dict, total_supply,total_circulating,decimals):
     #total_circulating = get_circulating_supply_estimate(token,chain,holders)
     #total_supply = get_total_supply(token,chain)
 
-    if holders == None:
+    if not holders:
         result = {
             'top_10_holders': None,
             'totals': {
@@ -1210,9 +1223,6 @@ def analyze_lp_security(token: str, chain: str = 'bsc') -> config.Dict:
     chain_ids = {
         'eth': 1,
         'bsc': 56,
-        'polygon': 137,
-        'arbitrum': 42161,
-        'avax': 43114
     }
     
     if chain not in chain_ids:
@@ -1592,7 +1602,8 @@ def get_token_transfers(token,chain):
     config.scan_rate_limiter.acquire()
     creation = get_contract_creation_tx(token,chain)
     creation_blocknum = int(creation["blocknum"]) if creation["blocknum"] else None
-    last_block = int(get_latest_tx(token,chain)['blockNumber']) if creation_blocknum else 'latest'
+    last_tx = get_latest_tx(token,chain)
+    last_block = int(last_tx['blockNumber']) if creation_blocknum and last_tx else 'latest'
 
     params = {
         'module': 'account',
@@ -1739,18 +1750,15 @@ def owner_hasless_5_LP(token,chain):
 """----------------------------------------"""
 
 def extract_all_functions(source_code: str):
+
     functions = []
     inside_function = False
     brace_count = 0
     current_function = []
 
-    # Load the JSON source code (expecting string with files and their content)
-    json_code = config.json.loads(source_code)
-
-    # Extract simplified file-content mapping
+    # You don’t need to parse JSON — assume the string is Solidity code
     simplified_contracts = {
-        filename: file_data['content']
-        for filename, file_data in json_code.items()
+        "contract.sol": source_code
     }
 
     # Regex pattern to detect function start
@@ -1765,32 +1773,27 @@ def extract_all_functions(source_code: str):
         for line in lines:
             stripped = line.strip()
 
-            # If not already inside a function, check for start
             if not inside_function:
                 if function_start_pattern.search(stripped):
                     inside_function = True
                     brace_count = stripped.count('{') - stripped.count('}')
                     current_function = [line]
-                    # If function ends on same line
                     if brace_count == 0:
                         functions.append('\n'.join(current_function))
                         inside_function = False
             else:
-                # Already inside a function
                 current_function.append(line)
                 brace_count += line.count('{') - line.count('}')
                 if brace_count == 0:
-                    # Function ends here
                     functions.append('\n'.join(current_function))
                     inside_function = False
+
     return functions
 
 def analyze_token_contract_with_snippets(source_code: str, pbar=None) -> dict:
     findings = {}
     funcs = extract_all_functions(source_code)
-    breakpoint()
-    normalized_funcs = [(f, f.lower()) for f in funcs]
-
+    normalized_funcs = [(f.strip(), f.strip().lower()) for f in funcs]    
     malicious_patterns = {
         'honeypot_mechanics': [
             # Transfer blocking through gas manipulation
@@ -1933,7 +1936,6 @@ def analyze_token_contract_with_snippets(source_code: str, pbar=None) -> dict:
 
         if pbar:
             pbar.update(1 / len(malicious_patterns))
-
     return {
         'total_matches': total_matches,
         'patterns_found': results
@@ -2154,6 +2156,26 @@ def get_volume_to_liquidity_ratio(web3: config.Web3, pair_address: str, latest_b
     Returns:
         dict: Contains token_volume, volume_usd, and vol_liq_ratio.
     """
+
+    class RateLimiter:
+        def __init__(self, max_calls, period):
+            self.lock = config.Lock()
+            self.max_calls = max_calls
+            self.period = period
+            self.calls = []
+
+        def acquire(self):
+            with self.lock:
+                now = config.time.time()
+                self.calls = [t for t in self.calls if now - t < self.period]
+                if len(self.calls) >= self.max_calls:
+                    time_to_wait = self.period - (now - self.calls[0])
+                    if time_to_wait > 0:
+                        config.time.sleep(time_to_wait)
+                self.calls.append(config.time.time())
+
+    logs_rate_limiter = RateLimiter(max_calls=1, period=2.0)  # Allow 1 log query every 2 seconds
+
     pair_address = web3.to_checksum_address(pair_address)
 
     # Estimate 24h block range
@@ -2163,19 +2185,18 @@ def get_volume_to_liquidity_ratio(web3: config.Web3, pair_address: str, latest_b
     # Swap event signature hash
     swap_event_sig = "0x" + web3.keccak(text="Swap(address,uint256,uint256,uint256,uint256,address)").hex()
 
-    # Infura and others often limit log queries to ~1000-5000 blocks per request
     MAX_BLOCK_RANGE = 1000  # adjust if needed based on provider limits
 
     logs = []
     current_from = from_block
-
     MAX_RETRIES = 5
-    RETRY_DELAY = 2  # seconds
+    RETRY_DELAY = 2  # base delay in seconds
 
     while current_from <= latest_block:
         current_to = min(current_from + MAX_BLOCK_RANGE - 1, latest_block)
         for attempt in range(MAX_RETRIES):
             try:
+                logs_rate_limiter.acquire()  # rate limit before each call
                 chunk_logs = web3.eth.get_logs({
                     "fromBlock": current_from,
                     "toBlock": current_to,
@@ -2183,16 +2204,17 @@ def get_volume_to_liquidity_ratio(web3: config.Web3, pair_address: str, latest_b
                     "topics": [swap_event_sig],
                 })
                 logs.extend(chunk_logs)
-                break  # break retry loop on success
+                break  # success, exit retry loop
             except Exception as e:
                 if "429" in str(e) and attempt < MAX_RETRIES - 1:
-                    print(f"Rate limit hit. Retrying after {RETRY_DELAY} seconds...")
-                    config.time.sleep(RETRY_DELAY * (attempt + 1))  # exponential backoff
+                    wait_time = RETRY_DELAY ** (attempt + 1)
+                    print(f"⚠️ Rate limited fetching logs {current_from}-{current_to}. Retrying in {wait_time}s...")
+                    config.time.sleep(wait_time)
                 else:
-                    print(f"Failed to fetch logs from {current_from} to {current_to}: {e}")
+                    print(f"❌ Failed to fetch logs from {current_from} to {current_to}: {e}")
                     break
         current_from = current_to + 1
-    
+
     # Load LP contract and get token addresses
     pair_abi = [
         {"name": "token0", "outputs": [{"type": "address"}], "inputs": [], "stateMutability": "view", "type": "function"},
@@ -2202,7 +2224,6 @@ def get_volume_to_liquidity_ratio(web3: config.Web3, pair_address: str, latest_b
     token0 = pair_contract.functions.token0().call().lower()
     token1 = pair_contract.functions.token1().call().lower()
 
-    # Compose stable addresses list: stablecoins + wrapped native token for this chain
     stable_addrs = [addr.lower() for addr in config.STABLECOINS[chain].values()]
 
     wrapped_native_token = None
@@ -2223,9 +2244,9 @@ def get_volume_to_liquidity_ratio(web3: config.Web3, pair_address: str, latest_b
     elif not token0_is_stable and not token1_is_stable:
         raise ValueError("Neither token is a recognized stablecoin or wrapped native token — cannot compute ratio.")
 
-    # Identify non-stable token
     token_address = token1 if token0_is_stable else token0
     token_index = 1 if token0_is_stable else 0
+
     # Get token decimals
     erc20_abi = [{"name": "decimals", "outputs": [{"type": "uint8"}], "inputs": [], "stateMutability": "view", "type": "function"}]
     token_contract = web3.eth.contract(address=web3.to_checksum_address(token_address), abi=erc20_abi)
@@ -2236,7 +2257,7 @@ def get_volume_to_liquidity_ratio(web3: config.Web3, pair_address: str, latest_b
     for log in logs:
         try:
             data = log["data"]
-            decoded = config.decode_abi(["uint256", "uint256", "uint256", "uint256"], data)
+            decoded = config.decode_abi(["uint256", "uint256", "uint256", "uint256"], bytes.fromhex(data[2:]))
             amount_in = decoded[token_index]
             amount_out = decoded[token_index + 2]
             total_token_volume += amount_in + amount_out

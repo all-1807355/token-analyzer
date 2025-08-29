@@ -174,6 +174,7 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
         price = None
         liquidity = None
         creation = None
+        total_lp_supply = None
         if data:
             price = data[0]
             liquidity = data[1]
@@ -231,10 +232,12 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
             return results, report_lines
             
         liquidity_holders = liquidity_status["lp_holders"]
-        last_block = utils.get_latest_tx(lp_address,chain)
-        if last_block != None:
-            last_block = int(last_block['blockNumber'])
-
+        if lp_address:
+            last_block = utils.get_latest_tx(lp_address,chain)
+            if last_block != None:
+                last_block = int(last_block['blockNumber'])
+        else:
+            last_block = None
         # WITHOUT API YOU WOULD USE THE ONE BELOW
         #TODO compute the time difference between the two. 
         # liquidity_holders = utils.get_lp_holders(lp_address, web3, pair_abi, creation_blocknum,last_block)
@@ -263,11 +266,11 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
             liquidity_to_market_cap_ratio = None
             market_cap_usd = None
 
-
-        lp_contract = web3.eth.contract(address=config.Web3.to_checksum_address(lp_address), abi=pair_abi)
+        
+        # lp_contract = web3.eth.contract(address=config.Web3.to_checksum_address(lp_address), abi=pair_abi)
         if liquidity_status.get('total_lp_supply',None):
             total_lp_supply = liquidity_status['total_lp_supply']
-        else:
+        elif not total_lp_supply:
             total_lp_supply = utils.get_total_supply_API(lp_address, chain)
 
         # total_lp_supply = utils.get_total_supply_API(token_address,chain)
@@ -385,7 +388,7 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
 
         #NOTE only use others when moralis is not useable
         holders_list = None
-        holders_list = utils.get_unique_token_holders_moralis(token_address, chain)
+        # holders_list = utils.get_unique_token_holders_moralis(token_address, chain)
         if not holders_list:
             holders_list = utils.get_unique_token_holders_API(token_address,chain)
             if not holders_list:
@@ -399,7 +402,8 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
                         error_msg = "Failed to retrieve holders data."
                         # results.setdefault('analyses', {}).setdefault('holders', {})['error'] = error_msg
                         report_lines.append(f"⚠️ Holder analysis error: {error_msg}\n")
-        
+        if holders_list == None:
+            holders_list = {}
         # lockandburn = utils.find_all_lockers_and_burners(token_address, chain, holders_list, web3)
         # # Extract address strings from the dicts
         # locker_addresses = {entry["address"] for entry in lockandburn["lockers"]}
@@ -432,7 +436,6 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
                 creator_percentage, creator_flag = owner_percentage, owner_flag
             else:
                 creator_percentage, creator_flag = utils.owner_circulating_supply_analysis(token_address, chain, creator, total_c_supply, web3, abi)
-        
         holder_analysis_results = utils.holder_circulating_supply_analysis(holders_list, total_c_supply,owner,creator,decimals)
         #     result = {
         #     'flagged_holders': flagged_holders,
@@ -459,7 +462,7 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
         for address, balance in holders_list.items():
             # age,age_readable = utils.get_holder_age(token_address, chain,address).values()
             enriched_dict[address] = {
-                'balance': balance / (10**decimals),
+                'balance': balance / (10**decimals) if balance else 0.0,
                 # 'age': age,
                 # 'age_readable': age_readable,
                 'percentage_of_total_supply': (balance / total_supply) * 100 if total_supply else 0.0,
@@ -468,7 +471,7 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
             if owner is not None and address.lower() == owner.lower():
                 owner_dict = {
                     'address': owner,
-                    'balance': balance / (10**decimals),
+                    'balance': balance / (10**decimals) if balance else 0.0,
                     # 'age':age,
                     # 'age_readable': age_readable,
                     'percentage_of_circulating_supply': owner_percentage,
@@ -477,26 +480,24 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
             if creator is not None and address.lower() == creator.lower():
                 creator_dict = {
                     'address': creator,
-                    'balance': balance / (10**decimals),
+                    'balance': balance / (10**decimals) if balance else 0.0,
                     # 'age':age,
                     # 'age_readable': age_readable,
                     'percentage_of_circulating_supply': creator_percentage,
                     'exceeds_5_percent': creator_flag
                 }
 
-
-
         results['analyses']['holder'] = {
             'total_holders': len(holders_list),
             'holders_list': enriched_dict,
-            'total_supply': total_supply / (10**decimals),
-            'total_circulating_supply': total_c_supply / (10**decimals),
+            'total_supply': total_supply / (10**decimals) if total_supply else 0.0,
+            'total_circulating_supply': total_c_supply / (10**decimals) if total_c_supply else 0.0,
             'owner': owner_dict,
             'creator': creator_dict,
             'holders_exceeding_5_percent_circulating': holder_analysis_results['flagged_holders'],
             'howmany_holders_exceeding_5_percent_circulating': holder_analysis_results['summary']['holders_exceeding_5_percent'],
             'top_10_holders': top10_analysis_results['top_10_holders'],
-            'total_top_10_balance': top10_analysis_results['totals']['total_top_10_balance'] / (10**decimals),
+            'total_top_10_balance': top10_analysis_results['totals']['total_top_10_balance'] / (10**decimals) if top10_analysis_results['totals']['total_top_10_balance'] else 0.0,
             'top10_percentage_of_total_supply': top10_analysis_results['totals']['total_top_10_percentage_of_total_supply'],
             'top10_percentage_of_circulating_supply': top10_analysis_results['totals']['total_top_10_percentage_of_circulating_supply'],
             'top_10_less_than_70_percent_of_total': top10_analysis_results['totals']['top_10_less_than_70_percent_total_supply'],
@@ -617,11 +618,10 @@ def contract_analysis(token_address: str, chain: str, results: dict, report_line
         owner = utils.get_owner(token_address, web3)
         creator = utils.get_creator(token_address, chain)
 
-
-        report_lines.append(f"Verified: {'OK!' if contract_info['verified'] else 'X'}\n")
-        report_lines.append(f"Owner Address: {results['analyses']['contract']['owner']}\n")
-        report_lines.append(f"Creator Address: {results['analyses']['contract']['creator']}\n")
+        report_lines.append(f"Verified: {'Yes' if contract_info['verified'] else 'No'}\n")
         report_lines.append(f"Is Proxy: {'Yes' if contract_info['is_proxy'] else 'No'}\n")
+        report_lines.append(f"Owner Address: {results['analyses']['contract']['owner'] if results.get('analyses').get('contract').get('owner') else "Owner Address not found\n"}\n")
+        report_lines.append(f"Creator Address: {results['analyses']['contract']['creator'] if results.get('analyses').get('contract').get('creator') else "Creator Address not found\n"}\n")
         report_lines.append(f"Is sellable (no honeypot): {'Yes' if sellable else 'No'}\n")
         report_lines.append(f"Is owner hardcoded: {'Yes' if hardcoded else 'No'}\n")
 
