@@ -759,7 +759,7 @@ def get_owner(token_address,web3):
         owner_address = contract.functions.owner().call()
         if owner_address == "0x0000000000000000000000000000000000000000":
             print("🔍 Ownership renounced or null.")
-            return None
+            return owner_address.lower()
         return owner_address.lower()
     except Exception as e:
         print(f"⚠️ Could not fetch owner() for {token_address}: {e}")

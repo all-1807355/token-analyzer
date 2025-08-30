@@ -388,7 +388,7 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
 
         #NOTE only use others when moralis is not useable
         holders_list = None
-        # holders_list = utils.get_unique_token_holders_moralis(token_address, chain)
+        holders_list = utils.get_unique_token_holders_moralis(token_address, chain)
         if not holders_list:
             holders_list = utils.get_unique_token_holders_API(token_address,chain)
             if not holders_list:

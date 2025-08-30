@@ -10,19 +10,13 @@ def find_json_files(base_path="."):
     """
     json_files = []
     
-    # Method 1: Look for test_data_analysis folder
-    test_data_path = Path(base_path) / "test_data_analysis"
-    if test_data_path.exists():
-        json_files.extend(list(test_data_path.glob("*.json")))
-        print(f"Found {len(json_files)} JSON files in test_data_analysis folder")
-    
-    # Method 2: Look for token_analysis JSON files in current directory
+    # Method 1: Look for token_analysis JSON files in current directory
     current_dir_files = list(Path(base_path).glob("token_analysis_*.json"))
     if current_dir_files:
         json_files.extend(current_dir_files)
         print(f"Found {len(current_dir_files)} token_analysis JSON files in current directory")
     
-    # Method 3: Search recursively for all token_analysis JSON files
+    # Method 2: Search recursively for all token_analysis JSON files
     if not json_files:
         recursive_files = list(Path(base_path).rglob("token_analysis_*.json"))
         json_files.extend(recursive_files)
@@ -44,27 +38,24 @@ def process_token_analysis_json(file_path):
     # 1. Contract DataFrame
     contract = data.get('analyses', {}).get('contract', {})
     code_analysis = contract.get('code_analysis', {})
-    if code_analysis == {} or code_analysis == None:
-        total_snippets = 0
-    else:
-        total_snippets = sum(section.get('snippets_number', 0) for section in code_analysis.values())
+    total_snippets = code_analysis.get("total_matches", 0)
     selected_keys = ['compiler_version', 'license_type', 'implementation','source_code','abi','code_analysis']
-
-    derived_columns = {
-        'has_source_code': True if contract.get("source_code") else False,
-        'has_abi': True if contract.get("abi") else False,
-        'total_snippets': total_snippets,
-        'mint_function_detected_number': code_analysis.get('mint_function_detected',{}).get("snippets_number",0) if code_analysis else 0,
-        'ownership_renounced_number': code_analysis.get('ownership_renounced',{}).get("snippets_number",0) if code_analysis else 0,
-        'is_honeypot_suspected_number': code_analysis.get('is_honeypot_suspected',{}).get("snippets_number",0) if code_analysis else 0,
-        'delayed_trading_detected_number': code_analysis.get('delayed_trading_detected',{}).get("snippets_number",0) if code_analysis else 0,
-        'transfer_cooldown_detected_number': code_analysis.get('transfer_cooldown_detected',{}).get("snippets_number",0) if code_analysis else 0,
-        'high_tax_detected_number': code_analysis.get('high_tax_detected',{}).get("snippets_number",0) if code_analysis else 0,
-        'blacklist_or_whitelist_detected_number': code_analysis.get('blacklist_or_whitelist_detected',{}).get("snippets_number",0) if code_analysis else 0,
-        'trading_disabled_possible_number': code_analysis.get('trading_disabled_possible',{}).get("snippets_number",0) if code_analysis else 0,
-        'other_suspicious_detected_number': code_analysis.get('other_suspicious_detected',{}).get("snippets_number",0) if code_analysis else 0,
-    }
     
+    patterns_found = code_analysis.get("patterns_found", {})
+    derived_columns = {
+        'has_source_code': bool(contract.get("source_code")),
+        'has_abi': bool(contract.get("abi")),
+        'total_snippets': total_snippets,
+        'honeypot_mechanics_number': patterns_found.get('honeypot_mechanics', {}).get('count', 0),
+        'ownership_manipulation_number': patterns_found.get('ownership_manipulation', {}).get('count', 0),
+        'transfer_blocking_number': patterns_found.get('transfer_blocking', {}).get('count', 0),
+        'stealth_fee_mechanics_number': patterns_found.get('stealth_fee_mechanics', {}).get('count', 0),
+        'liquidity_manipulation_number': patterns_found.get('liquidity_manipulation', {}).get('count', 0),
+        'router_manipulation_number': patterns_found.get('router_manipulation', {}).get('count', 0),
+        'balance_manipulation_number': patterns_found.get('balance_manipulation', {}).get('count', 0),
+        'anti_analysis_features_number': patterns_found.get('anti_analysis_features', {}).get('count', 0),
+        'emergency_functions_number': patterns_found.get('emergencyFunctions', {}).get('count', 0),
+    }
     contract_data = {
         'token_address': data['token_address'],
         'chain': data['chain'],
@@ -75,12 +66,17 @@ def process_token_analysis_json(file_path):
     contract_df = pd.DataFrame([contract_data])
     
     # 2. Holders DataFrame (excluding holders_list)
-    selected_keys = ['holders_list','top_10_holders','holders_exceeding_5_percent','owner','creator']
+    selected_keys = ['holders_list','top_10_holders','holders_exceeding_5_percent_circulating','owner','creator']
+    owner = data['analyses']['holder'].get('owner',{}).get('address','')
+    creator = data['analyses']['holder'].get('creator',{}).get('address','')
     holders_data = {
         'token_address': data['token_address'],
         'chain': data['chain'],
         'token_name': data['token_name'],
-        **{k: v for k, v in data['analyses']['holder'].items() if k not in selected_keys}
+        **{k: v for k, v in data['analyses']['holder'].items() if k not in selected_keys},
+        'owner_exceeds_5_percent_circulating': data['analyses']['holder'].get('owner',{}).get('exceeds_5_percent',None),
+        'creator_exceeds_5_percent_circulating': data['analyses']['holder'].get('creator',{}).get('exceeds_5_percent',None),
+        'owner_is_creator': owner.lower() == creator.lower()
     }
     holders_df = pd.DataFrame([holders_data])
     
@@ -93,7 +89,12 @@ def process_token_analysis_json(file_path):
                 'chain': data['chain'],
                 'token_name': data['token_name'],
                 'holder_address': address,
-                **holder_info
+                'is_owner': address.lower() == owner.lower(),
+                'is_creator': address.lower() == creator.lower(),
+                'balance': float(holder_info.get('balance')),
+                'percentage_of_total_supply': float(holder_info.get('percentage_of_total_supply')),
+                'percentage_of_circulating_supply': float(holder_info.get('percentage_of_circulating_supply')),
+                'exceeds_5_percent': bool(holder_info.get('percentage_of_circulating_supply') > 5)
             }
             holders_list_data.append(row)
     else:
@@ -108,32 +109,6 @@ def process_token_analysis_json(file_path):
             'percentage_of_circulating_supply': None
         }
         holders_list_data.append(row)
-    
-    if data['analyses']['holder'].get('owner',{}) != None and data['analyses']['holder'].get('owner',{}).get('address','') not in holders_list_data:
-        if 'owner' in data['analyses']['holder'] and data['analyses']['holder']['owner']:
-            row = {
-                'token_address': data['token_address'],
-                'chain': data['chain'],
-                'token_name': data['token_name'],
-                'holder_address': data['analyses']['holder']['owner']['address'],
-                'balance': data['analyses']['holder']['owner']['balance'],
-                'percentage_of_total_supply': float((data['analyses']['holder']['owner']['balance'] / data['analyses']['holder']['total_supply']) * 100),
-                'percentage_of_circulating_supply': data['analyses']['holder']['owner']['percentage_of_supply']
-            }
-            holders_list_data.append(row)
-
-    if data['analyses']['holder'].get('creator',{}) != None and data['analyses']['holder'].get('creator',{}).get('address','') not in holders_list_data:
-        if 'creator' in data['analyses']['holder'] and data['analyses']['holder']['creator']:
-            row = {
-                'token_address': data['token_address'],
-                'chain': data['chain'],
-                'token_name': data['token_name'],
-                'holder_address': data['analyses']['holder']['creator']['address'],
-                'balance': data['analyses']['holder']['creator']['balance'],
-                'percentage_of_total_supply': float((data['analyses']['holder']['creator']['balance'] / data['analyses']['holder']['total_supply']) * 100),
-                'percentage_of_circulating_supply': data['analyses']['holder']['creator']['percentage_of_supply']
-            }
-            holders_list_data.append(row)
 
     holders_list_df = pd.DataFrame(holders_list_data)
     
@@ -254,7 +229,7 @@ def process_all_json_files(base_path="."):
 # Usage
 if __name__ == "__main__":
     # Process all JSON files
-    master_dataframes = process_all_json_files("../data")
+    master_dataframes = process_all_json_files("../data/bad_tokens")
     
     if master_dataframes:
         # Access individual dataframes
