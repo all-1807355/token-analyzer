@@ -152,6 +152,7 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
     results['analyses']['liquidity'] = {
             'price_usd': None,
             'liquidity_usd': None,
+            'slippage_stats': None,
             'market_cap_usd': None,
             'liquidity_to_market_cap_ratio': None,
             'token_volume': None,
@@ -272,7 +273,8 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
             total_lp_supply = liquidity_status['total_lp_supply']
         elif not total_lp_supply:
             total_lp_supply = utils.get_total_supply_API(lp_address, chain)
-
+        
+        slippage_stats = utils.effective_slippage_rate(token_address,chain,web3)
         # total_lp_supply = utils.get_total_supply_API(token_address,chain)
         owner = results["analyses"]["contract"].get("owner",utils.get_owner(token_address, web3))
         #owner_lp_balance = lp_address.functions.balanceOf(owner).call()
@@ -280,6 +282,7 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
         results['analyses']['liquidity'] = {
             'price_usd': price,
             'liquidity_usd': liquidity,
+            'slippage_stats': slippage_stats,
             'market_cap_usd': market_cap_usd,
             'liquidity_to_market_cap_ratio': liquidity_to_market_cap_ratio,
             'token_volume': token_volume,
@@ -414,10 +417,10 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
         #     if holder in locker_addresses or holder in burner_addresses:
         #         del holders_list[holder]
         decimals = utils.get_token_decimals(token_address,web3)
-        total_supply = utils.get_total_supply_API(token_address,chain)
+        total_supply = utils.get_total_supply_API(token_address,chain) #RAW not normalized
         coingecko_id = utils.get_coingecko_id_from_contract(token_address, chain)
         if coingecko_id != None:
-            total_c_supply = utils.get_circulating_supply(coingecko_id)
+            total_c_supply = utils.get_circulating_supply(coingecko_id) * (10 ** decimals) #Normalized needs to be converted to RAW
         elif holders_list:
             total_c_supply = utils.get_circulating_supply_estimate(token_address, chain, total_supply, holders_list)
         else: 

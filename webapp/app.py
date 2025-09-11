@@ -12,6 +12,7 @@ import os
 # Add the parent directory to sys.path to import main
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from main import token_analysis
+from main import evaluate_token_safety
 
 app = FastAPI()
 
@@ -52,6 +53,9 @@ async def analyze(request: Request):
             progress_data["total"] = total
 
         results = token_analysis(token, chain, progress_callback=update_progress)
+        safety_score = evaluate_token_safety(results)
+        results["safety_score"] = safety_score
+
         return {"status": "success", "data": results}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

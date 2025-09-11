@@ -3,8 +3,14 @@
 
 # TODO
 Scrivi la procedura che hai usato per implementare tutte le metriche -> crea un nuovo documento o aggiorna quello precedente
-Rifare snippet analysis sui contratti -> troppe keyword, troppo generiche. Magari facciamo l'analisi prendendo direttamente f
-distribuzioni cumulative CDF
+
+grafici ok?
+metriche ok?
+quanto deve essere lunga la tesi?
+va bene come l'ho divisa?
+parte di literature review? quanto devo essere specifico?
+
+- l'analisi dei contratti risulta inconclusive per quanto riguarda le metriche che fanno analisi statica
 
 
 
