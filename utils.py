@@ -978,7 +978,7 @@ def is_token_suspicious_by_slippage(token_address: str, chain: str, web3, lp_add
                 config.time.sleep(retry_delay)
 
     token_address = token_address.lower()
-    if pair_address == None:
+    if lp_address == None:
         return None
     # Load the pair contract
     pair_address = lp_address.lower()

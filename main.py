@@ -2591,7 +2591,7 @@ def main():
     }
 
     toanalyze_good = {
-        # "0xa49d7499271ae71cd8ab9ac515e6694c755d400c": "eth",
+        "0xa49d7499271ae71cd8ab9ac515e6694c755d400c": "eth",
         "0xc18c07a18198a6340cf4d94855fe5eb6dd33b46e": "eth",
         "0x26a604dffe3ddab3bee816097f81d3c4a2a4cf97": "eth",
         "0x8baf5d75cae25c7df6d1e0d26c52d19ee848301a": "eth",
