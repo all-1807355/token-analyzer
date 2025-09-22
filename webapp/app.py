@@ -53,8 +53,8 @@ async def analyze(request: Request):
             progress_data["total"] = total
 
         results = token_analysis(token, chain, progress_callback=update_progress)
-        safety_score = evaluate_token_safety(results)
-        results["safety_score"] = safety_score
+        #safety_score = evaluate_token_safety(results)
+        #results["safety_score"] = safety_score
 
         return {"status": "success", "data": results}
     except Exception as e:

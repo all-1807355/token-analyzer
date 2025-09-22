@@ -152,7 +152,11 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
     results['analyses']['liquidity'] = {
             'price_usd': None,
             'liquidity_usd': None,
-            'slippage_stats': None,
+            'slippage_stats': {
+                "is_suspicious": None,
+                "first_abnormal_slippage_percent": None,
+                "first_abnormal_slippage_fixed": None
+            },
             'market_cap_usd': None,
             'liquidity_to_market_cap_ratio': None,
             'token_volume': None,
@@ -191,6 +195,8 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
                 price = None
                 liquidity = None
         total_c_supply = results['analyses']['holder'].get('total_circulating_supply')
+        total_supply = results['analyses']['holder'].get('total_supply')
+        #TODO FIX
         if total_c_supply == None:
             coingecko_id = utils.get_coingecko_id_from_contract(token_address, chain)
             if coingecko_id != None:
@@ -213,6 +219,11 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
                                 # results.setdefault('analyses', {}).setdefault('holders', {})['error'] = error_msg
                                 report_lines.append(f"⚠️ Liquidity analysis error: {error_msg}\n")
                     total_supply = utils.get_total_supply_API(token_address,chain)
+                    if total_supply:
+                        decimals = utils.get_token_decimals(token_address,web3)
+                        total_supply = total_supply / (10 ** decimals)
+                    elif total_supply == None:
+                        utils.get_total_supply_web3(token_address,web3)
                     total_c_supply = utils.get_circulating_supply_estimate(token_address,chain,total_supply,holders)
         
         if creation == None:
@@ -274,7 +285,13 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
         elif not total_lp_supply:
             total_lp_supply = utils.get_total_supply_API(lp_address, chain)
         
-        slippage_stats = utils.effective_slippage_rate(token_address,chain,web3)
+        slippage_stats = utils.is_token_suspicious_by_slippage(token_address,chain,web3)
+        if slippage_stats == None:
+            slippage_stats = {
+                "is_suspicious": None,
+                "first_abnormal_slippage_percent": None,
+                "first_abnormal_slippage_fixed": None
+            },
         # total_lp_supply = utils.get_total_supply_API(token_address,chain)
         owner = results["analyses"]["contract"].get("owner",utils.get_owner(token_address, web3))
         #owner_lp_balance = lp_address.functions.balanceOf(owner).call()
@@ -368,7 +385,8 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
     results['analyses']['holder'] = {
         'total_holders': 0,
         'holders_list': None,
-        'total_circulating_supply': 0,
+        'total_supply': 0.0,
+        'total_circulating_supply': 0.0,
         'owner': None,
         'creator': None,
         'holders_exceeding_5_percent_circulating': None,
@@ -418,9 +436,11 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
         #         del holders_list[holder]
         decimals = utils.get_token_decimals(token_address,web3)
         total_supply = utils.get_total_supply_API(token_address,chain) #RAW not normalized
+        if total_supply:
+            total_supply = total_supply / (10 ** decimals) #Normalized total_supply
         coingecko_id = utils.get_coingecko_id_from_contract(token_address, chain)
         if coingecko_id != None:
-            total_c_supply = utils.get_circulating_supply(coingecko_id) * (10 ** decimals) #Normalized needs to be converted to RAW
+            total_c_supply = utils.get_circulating_supply(coingecko_id) #Already normalized
         elif holders_list:
             total_c_supply = utils.get_circulating_supply_estimate(token_address, chain, total_supply, holders_list)
         else: 

@@ -229,7 +229,7 @@ def process_all_json_files(base_path="."):
 # Usage
 if __name__ == "__main__":
     # Process all JSON files
-    master_dataframes = process_all_json_files("../data/bad_tokens")
+    master_dataframes = process_all_json_files("../data/good_tokens")
     
     if master_dataframes:
         # Access individual dataframes
