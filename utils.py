@@ -580,7 +580,7 @@ def get_holder_age(token, chain, address,max_pages=10,page_size=100):
         "holder_age": None
     }
 
-def get_unique_token_holders_web3(token_address: str, chain: str, web3: config.Web3, abi: list,
+def get_unique_token_holders_web3(token_address: str, chain: str, web3: config.Web3, decimals, abi: list,
                           from_block: int, to_block: int = 'latest',
                           step: int = 5000, max_workers: int = 10) -> dict:
     holders = {}
@@ -589,7 +589,7 @@ def get_unique_token_holders_web3(token_address: str, chain: str, web3: config.W
     def fetch_balance_with_rate_limit(addr):
         config.scan_rate_limiter.acquire()  # ⏳ Waits if rate exceeded
         checksum_addr = config.Web3.to_checksum_address(addr)
-        return balance_of(checksum_addr).call()
+        return balance_of(checksum_addr).call() #The balance is RAW
     
     if isinstance(to_block, str) and to_block.lower() == 'latest':
         to_block = web3.eth.block_number
@@ -635,7 +635,7 @@ def get_unique_token_holders_web3(token_address: str, chain: str, web3: config.W
                 result = future.result()
                 if result:
                     addr, balance = result
-                    holders[addr] = balance
+                    holders[addr] = balance / (10 ** decimals)
     else:
         # Use on-chain balanceOf function
         with config.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -644,12 +644,12 @@ def get_unique_token_holders_web3(token_address: str, chain: str, web3: config.W
                 addr = futures[future]
                 balance = future.result()
                 if balance:
-                    holders[addr] = balance  / (10**18)
+                    holders[addr] = balance / (10 ** decimals)
 
     print(f"✅ Found {len(holders)} holders with non-zero balances.")
     return holders
 
-def get_unique_token_holders_API(token, chain, max_addresses=200):
+def get_unique_token_holders_API(token, chain, decimals, max_addresses=200):
     addresses = set()
     transactions = get_token_transfers(token, chain)
     if not transactions:
@@ -658,15 +658,14 @@ def get_unique_token_holders_API(token, chain, max_addresses=200):
     for tx in config.tqdm(transactions, desc="Processing transactions"):
         from_addr = tx["from"].lower()
         to_addr = tx["to"].lower()
-        zero_addr = "0x0000000000000000000000000000000000000000"
 
-        if from_addr != zero_addr:
+        if not isburner(from_addr,chain):
             addresses.add(from_addr)
             if len(addresses) >= max_addresses:
                 break
         if len(addresses) >= max_addresses:
             break
-        if to_addr != zero_addr:
+        if not isburner(to_addr,chain):
             addresses.add(to_addr)
             if len(addresses) >= max_addresses:
                 break
@@ -681,7 +680,7 @@ def get_unique_token_holders_API(token, chain, max_addresses=200):
     for addr in config.tqdm(addresses, desc="Fetching balances"):
         balance = get_token_balance_API(token, addr, chain)
         if balance is not None and balance > 0:
-            holders[addr] = balance
+            holders[addr] = balance / (10 ** decimals)
         config.time.sleep(0.7)
 
     print(f"✅ Found {len(holders)} holders with non-zero balances.")
@@ -788,7 +787,7 @@ def get_total_supply_API(token,chain):
     res = api_call(params,chain)
     return float(res['result']) if res['result'] else None
 
-def get_total_supply_web3(token_address,web3):
+def get_total_supply_web3(token_address,web3,decimals):
 
     # ERC-20 standard ABI snippet for totalSupply and decimals
     ERC20_ABI = [
@@ -806,8 +805,6 @@ def get_total_supply_web3(token_address,web3):
     
     token_address = web3.to_checksum_address(token_address)
     contract = web3.eth.contract(address=token_address, abi=ERC20_ABI)
-
-    decimals = get_token_decimals(token_address, web3)
 
     try:
         raw_supply = contract.functions.totalSupply().call()
@@ -981,7 +978,8 @@ def is_token_suspicious_by_slippage(token_address: str, chain: str, web3, lp_add
                 config.time.sleep(retry_delay)
 
     token_address = token_address.lower()
-
+    if pair_address == None:
+        return None
     # Load the pair contract
     pair_address = lp_address.lower()
     pair_contract = web3.eth.contract(
@@ -1024,13 +1022,26 @@ def is_token_suspicious_by_slippage(token_address: str, chain: str, web3, lp_add
 
     def calculate_slippage(amount_in):
         try:
-            spot_price = reserve_out / reserve_in
+            if amount_in <= 0:
+                return 0.0
+            if reserve_in == 0 or reserve_out == 0:
+                return 0.0
+
+            spot_price = reserve_out / reserve_in if reserve_in != 0 else 0
             expected_output = amount_in * spot_price
+
             amount_in_with_fee = amount_in * (1 - fee)
-            actual_output = (amount_in_with_fee * reserve_out) / (reserve_in + amount_in_with_fee)
+            denominator = reserve_in + amount_in_with_fee
+            if denominator == 0:
+                return 0.0
+
+            actual_output = (amount_in_with_fee * reserve_out) / denominator
+
             if expected_output == 0:
                 return 0.0
-            return ((expected_output - actual_output) / expected_output) * 100
+
+            slippage = ((expected_output - actual_output) / expected_output) * 100
+            return slippage if slippage >= 0 else 0.0
         except Exception as e:
             print(f"⚠️ Error in slippage calculation for amount {amount_in}: {e}")
             return 0.0
@@ -1112,15 +1123,21 @@ def get_lp_pair(token: str, chain: str,web3) -> tuple:
     """
     chain = chain.lower()
     if chain == "bsc":
-        # RPC_URL = config.RPC_BSC
-        factory_addr = config.Web3.to_checksum_address("0xca143ce32fe78f1f7019d7d551a6402fc5350c73")  # PancakeSwap V2
-        base_pair_token = config.Web3.to_checksum_address("0xBB4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c")  # WBNB
+        factory_addr = web3.to_checksum_address("0xca143ce32fe78f1f7019d7d551a6402fc5350c73")  # PancakeSwap V2
+        base_tokens = {
+            "wbnb": "0xBB4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
+            "busd": "0xe9e7cea3dedca5984780bafc599bd69add087d56",
+            "usdt": "0x55d398326f99059ff775485246999027b3197955"
+        }
     elif chain == "eth":
-        # RPC_URL = config.RPC_ETH  # Replace with actual Infura/Alchemy URL
-        factory_addr = config.Web3.to_checksum_address("0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f")  # Uniswap V2
-        base_pair_token = config.Web3.to_checksum_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")  # WETH
+        factory_addr = web3.to_checksum_address("0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f")  # Uniswap V2
+        base_tokens = {
+            "weth": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+            "usdc": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "usdt": "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+        }
     else:
-        raise ValueError("Unsupported chain. Use 'bsc' or 'ethereum'.")
+        raise ValueError("Unsupported chain. Use 'bsc' or 'eth'.")
     
     # web3 = config.Web3(config.Web3.HTTPProvider(RPC_URL))
     # if not web3.is_connected():
@@ -1192,13 +1209,63 @@ def get_lp_pair(token: str, chain: str,web3) -> tuple:
     ]
 
     factory = web3.eth.contract(address=factory_addr, abi=factory_abi)
+    token_address = web3.to_checksum_address(token)
 
-    token_address = config.Web3.to_checksum_address(token)
-    pair_address = factory.functions.getPair(token_address, base_pair_token).call()
-    if pair_address == "0x0000000000000000000000000000000000000000":
-            print(f"No liquidity pair found for {token}")
-            return None, None
-    return pair_address,pair_abi
+    best_pair = None
+    best_liquidity = 0.0
+
+    for base_name, base_token in base_tokens.items():
+        base_token_address = web3.to_checksum_address(base_token)
+        
+        # Get pair address
+        try:
+            pair_address = factory.functions.getPair(token_address, base_token_address).call()
+        except Exception as e:
+            print(f"Error getting pair for {base_name}: {e}")
+            continue
+
+        # Skip if no pair exists
+        if pair_address == "0x0000000000000000000000000000000000000000":
+            continue
+
+        try:
+            pair = web3.eth.contract(address=pair_address, abi=pair_abi)
+            reserves = pair.functions.getReserves().call()
+            token0 = pair.functions.token0().call()
+            token1 = pair.functions.token1().call()
+
+            # Figure out which token is the base token
+            if token0.lower() == base_token_address.lower():
+                base_reserve_raw = reserves[0]
+                quote_reserve_raw = reserves[1]
+                base_token_actual = token0
+                quote_token_actual = token1
+            elif token1.lower() == base_token_address.lower():
+                base_reserve_raw = reserves[1]
+                quote_reserve_raw = reserves[0]
+                base_token_actual = token1
+                quote_token_actual = token0
+            else:
+                continue  # Unexpected, skip
+
+            # Get decimals
+            base_decimals = get_token_decimals(base_token_actual, web3)
+            quote_decimals = get_token_decimals(quote_token_actual, web3)
+            
+            base_reserve = base_reserve_raw / (10 ** base_decimals)
+            # Keep track of the pair with the highest base token reserve
+            if base_reserve > best_liquidity:
+                best_liquidity = base_reserve
+                best_pair = pair_address
+
+        except Exception as e:
+            print(f"Error reading pair data for {base_name}: {e}")
+            continue
+    if best_pair:
+        return best_pair, pair_abi
+    else:
+      print(f"No valid LP pair found for token {token}")
+      return None, None
 
 def get_lp_holders(lp_address: str, chain, web3: config.Web3, pair_abi: list,
                    from_block: int, to_block: int = 'latest',
@@ -1388,8 +1455,8 @@ def analyze_lp_security(token: str, chain: str = 'bsc') -> config.Dict:
     # Construct output
     liquidity_status = {
         "locked_liquidity_percent": round(percent_locked, 2),
-        "lock_duration": lock_duration,
-        "locked_95_for_15_days": locked_95_for_15d,
+        "lock_duration": max_lock_duration,
+        "locked_95_for_15_days": locked_95_for_15d, #compliance
         "liquidity_lock_status": "Secure" if locked_95_for_15d else "Unverified or Unlocked",
         "creator_under_5_percent": creator_under_5_percent,
         "creator_percent_of_lp": round(creator_percent_of_lp, 4),
@@ -2063,7 +2130,11 @@ def analyze_token_contract_with_snippets(source_code: str, pbar=None) -> dict:
             r'bool\s+public\s+renounced;\s*.*function\s+renounceOwnership',
             # Stealth admin controls
             r'modifier\s+onlyAdmin\s*{\s*require\s*\(\s*_admins\[msg\.sender\]',
-            r'function\s+setController\s*\(\s*address\s*\)\s*external'
+            r'function\s+setController\s*\(\s*address\s*\)\s*external',
+            # Blacklisting
+            r'mapping\s*\(\s*address\s*=>\s*bool\s*\)\s*(blacklist|whitelist|isBot)',
+            r'require\s*\(\s*!\s*(blacklist|botList)\[msg\.sender\]',
+            r'if\s*\(\s*!\s*(whitelist|allowedList)\[.*\]'
         ],
 
         'transfer_blocking': [
@@ -2076,6 +2147,9 @@ def analyze_token_contract_with_snippets(source_code: str, pbar=None) -> dict:
             # Complex transfer restrictions
             r'if\s*\(\s*amount\s*>\s*maxTxAmount\s*&&\s*!_isExcluded\[sender\]',
             r'require\s*\(\s*whitelist\[msg\.sender\]\s*\|\|\s*!tradingEnabled'
+            r'require\s*\(\s*tradingEnabled\s*==?\s*true',
+            r'function\s+enableTrading\s*\(\s*\).*onlyOwner',
+            r'modifier\s+tradingOpen\s*{\s*require\s*\(\s*tradingEnabled'
         ],
 
         'stealth_fee_mechanics': [
@@ -2087,7 +2161,9 @@ def analyze_token_contract_with_snippets(source_code: str, pbar=None) -> dict:
             r'sellFee\s*=\s*previousFee\s*\*\s*2',
             # Fee bypass checks
             r'mapping\s*\(\s*address\s*=>\s*bool\s*\)\s*private\s*_isExcludedFromFee',
-            r'function\s+excludeFromFee\s*\(\s*address\s*\)\s*external\s*onlyOwner'
+            r'function\s+excludeFromFee\s*\(\s*address\s*\)\s*external\s*onlyOwner',
+            r'(tax|sell|liquidity)Fee\s*=\s*(1[0-9]|[2-9][0-9]|\d{3,})',
+            r'(_fee|taxAmount)\s*=\s*\(?\s*amount\s*\*.*(10|[1-9][0-9])\s*/\s*100'
         ],
 
         'liquidity_manipulation': [
@@ -2138,7 +2214,14 @@ def analyze_token_contract_with_snippets(source_code: str, pbar=None) -> dict:
             r'selfdestruct\s*\(\s*payable\s*\(\s*owner\s*\)\s*\)'
         ],
 
-        'emergencyFunctions': [
+          'block_based_restrictions': [
+            r'block\.number\s*<\s*\w+',
+            r'block\.number\s*>\s*\w+',
+            r'block\.number\s*-\s*\w+\[.*\]\s*<\s*\d+',
+            r'require\s*\(\s*block\.number\s*>=?\s*\w+',
+        ],
+
+          'emergencyFunctions': [
             # Emergency controls
             r'function\s+pause\s*\(\s*\)\s*external\s*onlyOwner',
             r'function\s+unpause\s*\(\s*\)\s*external\s*onlyOwner',
@@ -7196,18 +7279,18 @@ def get_dexscreener_price_liquidity_volume(token_address,chainId = 1):
         price = float(top_pair.get('priceUsd', 0))
         liquidity = float(top_pair['liquidity']['usd']) #LIQUIDITY POOL DEPTH (Total USD value of tokens locked in the most liquid pool)
         volume_24h = float(top_pair['volume']['h24'])
+        
         return price, liquidity, volume_24h
     except (TypeError, ValueError):
         return None
 
 
-def get_quote_token_usd_price(token_address: str,chain: str, web3) -> float:
-    # Stablecoin assumed = 1 USD
+def get_quote_token_usd_price(token_address: str, chain: str, web3) -> float:
+    # Stablecoins assumed = 1 USD
     for stable_addr in config.STABLECOINS[chain].values():
         if token_address.lower() == stable_addr.lower():
             return 1.0
 
-    # Use reference pair to calculate price in USD
     if chain == "eth":
         ref = config.REFERENCE_PAIRS["eth"]["weth_usdc"]
     elif chain == "bsc":
@@ -7215,19 +7298,41 @@ def get_quote_token_usd_price(token_address: str,chain: str, web3) -> float:
     else:
         raise ValueError("Unsupported chain for reference pricing.")
 
-    ref_pair = web3.eth.contract(address=config.Web3.to_checksum_address(ref["pair"]), abi=config.PAIR_ABI)
-    reserves = ref_pair.functions.getReserves().call()
+    pair = web3.eth.contract(
+        address=config.Web3.to_checksum_address(ref["pair"]),
+        abi=config.PAIR_ABI
+    )
+    reserves = pair.functions.getReserves().call()
+    token0 = pair.functions.token0().call()
+    token1 = pair.functions.token1().call()
 
-    if token_address.lower() == ref["token0"].lower():
-        token_reserve = reserves[0] / (10 ** ref["token0_decimals"])
-        usd_reserve = reserves[1] / (10 ** ref["token1_decimals"])
-    elif token_address.lower() == ref["token1"].lower():
-        token_reserve = reserves[1] / (10 ** ref["token1_decimals"])
-        usd_reserve = reserves[0] / (10 ** ref["token0_decimals"])
+    token0_decimals = ref["token0_decimals"]
+    token1_decimals = ref["token1_decimals"]
+
+    # Normalize reserves
+    reserve0 = reserves[0] / (10 ** token0_decimals)
+    reserve1 = reserves[1] / (10 ** token1_decimals)
+
+    # Find which one is the stablecoin
+    if token0.lower() in [addr.lower() for addr in config.STABLECOINS[chain].values()]:
+        # token0 is stablecoin, token1 is the one being priced
+        stable_reserve = reserve0
+        target_reserve = reserve1
+    elif token1.lower() in [addr.lower() for addr in config.STABLECOINS[chain].values()]:
+        stable_reserve = reserve1
+        target_reserve = reserve0
     else:
-        raise ValueError("Token not found in reference pair.")
+        raise ValueError("No stablecoin found in reference pair.")
 
-    return usd_reserve / token_reserve if token_reserve > 0 else 0
+    if target_reserve == 0:
+        return 0.0
+
+    price = stable_reserve / target_reserve
+
+    # Debug:
+    print(f"[USD PRICE DEBUG] {token_address} = ${price:.4f} (via pair {ref['pair']})")
+
+    return price
 
 def get_price_and_liquidity(pair_address: str, base_token_address: str, chain: str, web3, base_decimals=18, quote_decimals=18):
     try:
@@ -7238,15 +7343,23 @@ def get_price_and_liquidity(pair_address: str, base_token_address: str, chain: s
         token1 = pair.functions.token1().call()
 
         if token0.lower() == base_token_address.lower():
-            base_reserve = reserves[0] / (10 ** base_decimals)
-            quote_reserve = reserves[1] / (10 ** quote_decimals)
+            base_reserve = reserves[0]
+            quote_reserve = reserves[1]
             quote_token = token1
         elif token1.lower() == base_token_address.lower():
-            base_reserve = reserves[1] / (10 ** base_decimals)
-            quote_reserve = reserves[0] / (10 ** quote_decimals)
+            base_reserve = reserves[1]
+            quote_reserve = reserves[0]
             quote_token = token0
         else:
             raise ValueError("Base token not in this pair")
+
+        # Fetch decimals for both tokens BEFORE using reserves
+        base_decimals = get_token_decimals(base_token_address, web3)
+        quote_decimals = get_token_decimals(quote_token, web3)
+
+        # Normalize reserves
+        base_reserve = base_reserve / (10 ** base_decimals)
+        quote_reserve = quote_reserve / (10 ** quote_decimals)
 
         quote_token_usd_price = get_quote_token_usd_price(quote_token, chain, web3)
         price_usd = (quote_reserve / base_reserve) * quote_token_usd_price if base_reserve > 0 else 0
@@ -7314,11 +7427,10 @@ def get_liquidity_to_marketcap_ratio(circulating_supply, price, liquidity, verbo
 
 
 
-def get_volume_to_liquidity_ratio(web3: config.Web3, pair_address: str, latest_block: int, chain: str, token_price_usd: float, liquidity_usd: float):
+def get_volume_to_liquidity_ratio(web3, pair_address: str, latest_block: int, chain: str,
+                                   token_price_usd: float, liquidity_usd: float):
     """
     Computes 24h volume-to-liquidity ratio for a UniswapV2-style LP pair.
-    Assumes liquidity in USD is provided externally.
-    Automatically detects the non-stable token for volume calculation.
 
     Args:
         web3 (Web3): Web3 instance.
@@ -7332,63 +7444,48 @@ def get_volume_to_liquidity_ratio(web3: config.Web3, pair_address: str, latest_b
         dict: Contains token_volume, volume_usd, and vol_liq_ratio.
     """
 
-    class RateLimiter:
-        def __init__(self, max_calls, period):
-            self.lock = config.Lock()
-            self.max_calls = max_calls
-            self.period = period
-            self.calls = []
-
-        def acquire(self):
-            with self.lock:
-                now = config.time.time()
-                self.calls = [t for t in self.calls if now - t < self.period]
-                if len(self.calls) >= self.max_calls:
-                    time_to_wait = self.period - (now - self.calls[0])
-                    if time_to_wait > 0:
-                        config.time.sleep(time_to_wait)
-                self.calls.append(config.time.time())
-
-    logs_rate_limiter = RateLimiter(max_calls=1, period=2.0)  # Allow 1 log query every 2 seconds
-
     pair_address = web3.to_checksum_address(pair_address)
 
     # Estimate 24h block range
     blocks_per_day = 28800 if chain == "bsc" else 6500
     from_block = max(latest_block - blocks_per_day, 0)
 
-    # Swap event signature hash
-    swap_event_sig = "0x" + web3.keccak(text="Swap(address,uint256,uint256,uint256,uint256,address)").hex()
+    # Swap event signature
+    swap_event_sig = web3.keccak(text="Swap(address,uint256,uint256,uint256,uint256,address)").hex()
+    swap_topic = "0x" + swap_event_sig
 
-    MAX_BLOCK_RANGE = 1000  # adjust if needed based on provider limits
+    # Fetch logs in chunks
+    MAX_BLOCK_RANGE = 1000
+    MAX_RETRIES = 5
+    RETRY_DELAY = 2
 
     logs = []
     current_from = from_block
-    MAX_RETRIES = 5
-    RETRY_DELAY = 2  # base delay in seconds
 
     while current_from <= latest_block:
         current_to = min(current_from + MAX_BLOCK_RANGE - 1, latest_block)
         for attempt in range(MAX_RETRIES):
             try:
-                logs_rate_limiter.acquire()  # rate limit before each call
+                config.scan_rate_limiter.acquire()
                 chunk_logs = web3.eth.get_logs({
                     "fromBlock": current_from,
                     "toBlock": current_to,
                     "address": pair_address,
-                    "topics": [swap_event_sig],
+                    "topics": [swap_topic],
                 })
                 logs.extend(chunk_logs)
-                break  # success, exit retry loop
+                break
             except Exception as e:
                 if "429" in str(e) and attempt < MAX_RETRIES - 1:
                     wait_time = RETRY_DELAY ** (attempt + 1)
                     print(f"⚠️ Rate limited fetching logs {current_from}-{current_to}. Retrying in {wait_time}s...")
                     config.time.sleep(wait_time)
                 else:
-                    print(f"❌ Failed to fetch logs from {current_from} to {current_to}: {e}")
+                    print(f"❌ Failed to fetch logs {current_from}-{current_to}: {e}")
                     break
         current_from = current_to + 1
+
+    print(f"✅ Retrieved {len(logs)} swap logs from block {from_block} to {latest_block}")
 
     # Load LP contract and get token addresses
     pair_abi = [
@@ -7401,23 +7498,20 @@ def get_volume_to_liquidity_ratio(web3: config.Web3, pair_address: str, latest_b
 
     stable_addrs = [addr.lower() for addr in config.STABLECOINS[chain].values()]
 
-    wrapped_native_token = None
+    # Include wrapped native token as stable equivalent
     if chain in config.REFERENCE_PAIRS:
-        for ref_key, ref_val in config.REFERENCE_PAIRS[chain].items():
+        for ref_val in config.REFERENCE_PAIRS[chain].values():
             wrapped_native_token = ref_val["token1"].lower()
+            stable_addrs.append(wrapped_native_token)
             break
 
-    if wrapped_native_token:
-        stable_addrs.append(wrapped_native_token)
-
-    # Determine which token is stable
     token0_is_stable = token0 in stable_addrs
     token1_is_stable = token1 in stable_addrs
 
     if token0_is_stable and token1_is_stable:
-        raise ValueError("Both tokens in the pair are stablecoins or wrapped native tokens — nothing to analyze.")
+        raise ValueError("Both tokens in the pair are stablecoins or wrapped native tokens.")
     elif not token0_is_stable and not token1_is_stable:
-        raise ValueError("Neither token is a recognized stablecoin or wrapped native token — cannot compute ratio.")
+        raise ValueError("Neither token is a stablecoin or wrapped native token.")
 
     token_address = token1 if token0_is_stable else token0
     token_index = 1 if token0_is_stable else 0
@@ -7427,34 +7521,37 @@ def get_volume_to_liquidity_ratio(web3: config.Web3, pair_address: str, latest_b
     token_contract = web3.eth.contract(address=web3.to_checksum_address(token_address), abi=erc20_abi)
     decimals = token_contract.functions.decimals().call()
 
-    # Sum Swap volume from logs
+    # --- Decode and sum volume ---
     total_token_volume = 0
+
     for log in logs:
         try:
             data = log["data"]
-            decoded = config.decode_abi(["uint256", "uint256", "uint256", "uint256"], bytes.fromhex(data[2:]))
-            amount_in = decoded[token_index]
-            amount_out = decoded[token_index + 2]
-            total_token_volume += amount_in + amount_out
-        except Exception:
+            decoded = config.decode_abi(["uint256", "uint256", "uint256", "uint256"], log["data"])
+
+            # Swap event: (amount0In, amount1In, amount0Out, amount1Out)
+            if token_index == 0:
+                volume = decoded[0] + decoded[2]  # amount0In + amount0Out
+            else:
+                volume = decoded[1] + decoded[3]  # amount1In + amount1Out
+
+            total_token_volume += volume
+
+        except Exception as e:
+            print(f"❌ Failed to decode log: {e}")
             continue
 
-    print(f"total_token_volume: {total_token_volume}")
     token_volume = total_token_volume / (10 ** decimals)
     volume_usd = token_volume * token_price_usd
 
-    print(f"token_volume, volume_usd: {token_volume} {volume_usd}")
-    if liquidity_usd == 0:
-        return {
-            'token_volume': token_volume,
-            'volume_usd': volume_usd,
-            'vol_liq_ratio': 0.0
-        }
+    print(f"📊 Token volume: {token_volume:.4f}, Volume USD: {volume_usd:.2f}")
+
+    vol_liq_ratio = volume_usd / liquidity_usd if liquidity_usd > 0 else 0.0
 
     return {
         'token_volume': token_volume,
         'volume_usd': volume_usd,
-        'vol_liq_ratio': volume_usd / liquidity_usd
+        'vol_liq_ratio': vol_liq_ratio
     }
 
 """----------------------------------------"""

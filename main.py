@@ -122,9 +122,9 @@ def analyze_token(token_address: str, chain: str,analysis_types: list = None) ->
 
     report = ''.join(report_lines)
     timestamp = config.datetime.now().strftime('%Y%m%d_%H%M%S')
-    config.os.makedirs('badtokens_data_collection', exist_ok=True)
-    report_filename = config.os.path.join('badtokens_data_collection', f"AIAtoken_analysis_{token_address[:10]}_{filename_suffix}_{timestamp}.txt")
-    json_filename = config.os.path.join('badtokens_data_collection', f"AIAtoken_analysis_{token_address[:10]}_{filename_suffix}_{timestamp}.json")
+    config.os.makedirs('goodtokens_data_collection/new', exist_ok=True)
+    report_filename = config.os.path.join('goodtokens_data_collection/new', f"token_analysis_{token_address[:10]}_{filename_suffix}_{timestamp}.txt")
+    json_filename = config.os.path.join('goodtokens_data_collection/new', f"token_analysis_{token_address[:10]}_{filename_suffix}_{timestamp}.json")
     with open(report_filename, 'w', encoding='utf-8') as f:
         f.write(report)
 
@@ -2591,7 +2591,7 @@ def main():
     }
 
     toanalyze_good = {
-        "0xa49d7499271ae71cd8ab9ac515e6694c755d400c": "eth",
+        # "0xa49d7499271ae71cd8ab9ac515e6694c755d400c": "eth",
         "0xc18c07a18198a6340cf4d94855fe5eb6dd33b46e": "eth",
         "0x26a604dffe3ddab3bee816097f81d3c4a2a4cf97": "eth",
         "0x8baf5d75cae25c7df6d1e0d26c52d19ee848301a": "eth",
@@ -3593,61 +3593,12 @@ def main():
         "0x14778860e937f509e651192a90589de711fb88a9": "bsc"
     }
 
-    token_address = "0xb51B97Dd5569FAB69495316B5a065CCcfF4B829d"
-    token_address = token_address.lower()
-    chain = "eth"
-    if chain == 'bsc':
-        web3 = config.Web3(config.Web3.HTTPProvider(config.RPC_BSC))
-    elif chain == 'eth':
-        web3 = config.Web3(config.Web3.HTTPProvider(config.RPC_ETH))
-        
-    total_supply = utils.get_total_supply_API(token_address,chain)
-    totaal_supply = utils.get_total_supply_web3(token_address,web3)
-    abi = utils.get_contract_info(token_address,chain)['abi']
-    burned = utils.get_token_balance_web3("0x000000000000000000000000000000000000dEaD",token_address,web3,abi)
-    burned += utils.get_token_balance_web3("0x0000000000000000000000000000000000000000",token_address,web3,abi)
-    print(burned, totaal_supply-burned)
-    
-
-    creation = utils.get_contract_creation_tx(token_address, chain)
-    creation_block = int(creation["blocknum"]) if creation else None
-    last_tx = utils.get_latest_tx(token_address,chain)
-    last_block = int(last_tx['blockNumber']) if last_tx else None
-    print(get_burned_from_events(token_address,web3,creation_block,last_block))
-    return
-
-
-
-
-
-    holders_list = utils.get_unique_token_holders_web3(token_address,chain,web3,abi,creation_block,last_block)
-    coingecko_id = utils.get_coingecko_id_from_contract(token_address, chain)
-    if coingecko_id != None:
-        total_c_supply = utils.get_circulating_supply(coingecko_id)
-    totaal_c_supply = utils.get_circulating_supply_estimate(token_address, chain, total_supply, holders_list)
-
-    print(total_supply,totaal_supply)
-    print(total_c_supply, totaal_c_supply)
-    return
-    total_c_supply = utils.get_circulating_supply_estimate(token_address,chain,total_supply,holders)
-
-    return 
-    tokens_dict = create_token_dictionary("C:/Users/Famiglia/Downloads/trustwallet-assets-master-blockchains-ethereum_assets", "C:/Users/Famiglia/Downloads/trustwallet-assets-master-blockchains-smartchain_assets")
-
-    output_file = 'tokens.json'
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(tokens_dict, f, indent=2)
-
-    print(f"Saved {len(tokens_dict)} tokens to {output_file}")
-
-    return
-
     # count = 0
-    for token, chain in config.tqdm(toanalyze.items(), desc="Analyzing tokens"):
+    for token, chain in config.tqdm(toanalyze_good.items(), desc="Analyzing tokens"):
         # if count >= 1:
         #     break
         start = config.time.perf_counter()
-        analyze_token(token, chain,['liquidity'])
+        analyze_token(token, chain)
         end = config.time.perf_counter()
         # count += 1
         print(f"Execution time: {end - start:.4f} seconds")

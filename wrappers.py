@@ -152,11 +152,9 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
     results['analyses']['liquidity'] = {
             'price_usd': None,
             'liquidity_usd': None,
-            'slippage_stats': {
-                "is_suspicious": None,
-                "first_abnormal_slippage_percent": None,
-                "first_abnormal_slippage_fixed": None
-            },
+            "slippage_is_suspicious": None,
+            "first_abnormal_slippage_percent": None,
+            "first_abnormal_slippage_fixed": None,
             'market_cap_usd': None,
             'liquidity_to_market_cap_ratio': None,
             'token_volume': None,
@@ -223,7 +221,8 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
                         decimals = utils.get_token_decimals(token_address,web3)
                         total_supply = total_supply / (10 ** decimals)
                     elif total_supply == None:
-                        utils.get_total_supply_web3(token_address,web3)
+                        decimals = utils.get_token_decimals(token_address,web3)
+                        total_supply = utils.get_total_supply_web3(token_address,web3,decimals)
                     total_c_supply = utils.get_circulating_supply_estimate(token_address,chain,total_supply,holders)
         
         if creation == None:
@@ -284,14 +283,17 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
             total_lp_supply = liquidity_status['total_lp_supply']
         elif not total_lp_supply:
             total_lp_supply = utils.get_total_supply_API(lp_address, chain)
+            if total_lp_supply:
+                decimals = utils.get_token_decimals(lp_address,web3)
+                total_lp_supply = total_lp_supply / (10 ** decimals)
         
-        slippage_stats = utils.is_token_suspicious_by_slippage(token_address,chain,web3)
+        slippage_stats = utils.is_token_suspicious_by_slippage(token_address,chain,web3,lp_address,pair_abi)
         if slippage_stats == None:
             slippage_stats = {
                 "is_suspicious": None,
                 "first_abnormal_slippage_percent": None,
                 "first_abnormal_slippage_fixed": None
-            },
+            }
         # total_lp_supply = utils.get_total_supply_API(token_address,chain)
         owner = results["analyses"]["contract"].get("owner",utils.get_owner(token_address, web3))
         #owner_lp_balance = lp_address.functions.balanceOf(owner).call()
@@ -299,13 +301,16 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
         results['analyses']['liquidity'] = {
             'price_usd': price,
             'liquidity_usd': liquidity,
-            'slippage_stats': slippage_stats,
+            "slippage_is_suspicious": slippage_stats['is_suspicious'],
+            "first_abnormal_slippage_percent": slippage_stats['first_abnormal_slippage_percent'],
+            "first_abnormal_slippage_fixed": slippage_stats['first_abnormal_slippage_fixed'],
             'market_cap_usd': market_cap_usd,
             'liquidity_to_market_cap_ratio': liquidity_to_market_cap_ratio,
             'token_volume': token_volume,
             'volume_usd': volume_24h,
             'volume_to_liquidity_ratio': vol_liq_ratio,
             "locked_liquidity_percent": liquidity_status['locked_liquidity_percent'],
+            "lock_duration": liquidity_status['lock_duration'],
             "locked_95_for_15_days": liquidity_status['locked_95_for_15_days'],
             "creator_under_5_percent": liquidity_status['creator_under_5_percent'],
             "creator_percent_of_lp": liquidity_status['creator_percent_of_lp'],
@@ -406,19 +411,20 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
             if not abi:
                 error_msg = "ABI not found or contract info unavailable for holder analysis."
                 report_lines.append(f"⚠️ Holder analysis error: {error_msg}\n")
-
+        
+        decimals = utils.get_token_decimals(token_address,web3)
         #NOTE only use others when moralis is not useable
         holders_list = None
         holders_list = utils.get_unique_token_holders_moralis(token_address, chain)
         if not holders_list:
-            holders_list = utils.get_unique_token_holders_API(token_address,chain)
+            holders_list = utils.get_unique_token_holders_API(token_address,chain,decimals)
             if not holders_list:
                 if not holders_list and abi != None:
                     creation = utils.get_contract_creation_tx(token_address, chain)
                     creation_block = int(creation["blocknum"]) if creation else None
                     last_tx = utils.get_latest_tx(token_address,chain)
                     last_block = int(last_tx['blockNumber']) if last_tx else None
-                    holders_list = utils.get_unique_token_holders_web3(token_address,chain,web3,abi,creation_block,last_block) if creation_block and last_block and abi else None
+                    holders_list = utils.get_unique_token_holders_web3(token_address,chain,web3,decimals,abi,creation_block,last_block) if creation_block and last_block and abi else None
                     if holders_list == None:
                         error_msg = "Failed to retrieve holders data."
                         # results.setdefault('analyses', {}).setdefault('holders', {})['error'] = error_msg
@@ -434,10 +440,13 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
         # for holder in list(holders_list.keys()):
         #     if holder in locker_addresses or holder in burner_addresses:
         #         del holders_list[holder]
-        decimals = utils.get_token_decimals(token_address,web3)
+        
         total_supply = utils.get_total_supply_API(token_address,chain) #RAW not normalized
         if total_supply:
             total_supply = total_supply / (10 ** decimals) #Normalized total_supply
+        elif total_supply == None:
+            total_supply = utils.get_total_supply_web3(token_address,web3,decimals)
+
         coingecko_id = utils.get_coingecko_id_from_contract(token_address, chain)
         if coingecko_id != None:
             total_c_supply = utils.get_circulating_supply(coingecko_id) #Already normalized
@@ -485,7 +494,7 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
         for address, balance in holders_list.items():
             # age,age_readable = utils.get_holder_age(token_address, chain,address).values()
             enriched_dict[address] = {
-                'balance': balance / (10**decimals) if balance else 0.0,
+                'balance': balance if balance else 0.0,
                 # 'age': age,
                 # 'age_readable': age_readable,
                 'percentage_of_total_supply': (balance / total_supply) * 100 if total_supply else 0.0,
@@ -494,7 +503,7 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
             if owner is not None and address.lower() == owner.lower():
                 owner_dict = {
                     'address': owner,
-                    'balance': balance / (10**decimals) if balance else 0.0,
+                    'balance': balance if balance else 0.0,
                     # 'age':age,
                     # 'age_readable': age_readable,
                     'percentage_of_circulating_supply': owner_percentage,
@@ -503,7 +512,7 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
             if creator is not None and address.lower() == creator.lower():
                 creator_dict = {
                     'address': creator,
-                    'balance': balance / (10**decimals) if balance else 0.0,
+                    'balance': balance if balance else 0.0,
                     # 'age':age,
                     # 'age_readable': age_readable,
                     'percentage_of_circulating_supply': creator_percentage,
