@@ -122,9 +122,9 @@ def analyze_token(token_address: str, chain: str,analysis_types: list = None) ->
 
     report = ''.join(report_lines)
     timestamp = config.datetime.now().strftime('%Y%m%d_%H%M%S')
-    config.os.makedirs('goodtokens_data_collection/new', exist_ok=True)
-    report_filename = config.os.path.join('goodtokens_data_collection/new', f"token_analysis_{token_address[:10]}_{filename_suffix}_{timestamp}.txt")
-    json_filename = config.os.path.join('goodtokens_data_collection/new', f"token_analysis_{token_address[:10]}_{filename_suffix}_{timestamp}.json")
+    config.os.makedirs('badtokens_data_collection/news', exist_ok=True)
+    report_filename = config.os.path.join('badtokens_data_collection/news', f"token_analysis_{token_address[:10]}_{filename_suffix}_{timestamp}.txt")
+    json_filename = config.os.path.join('badtokens_data_collection/news', f"token_analysis_{token_address[:10]}_{filename_suffix}_{timestamp}.json")
     with open(report_filename, 'w', encoding='utf-8') as f:
         f.write(report)
 
@@ -338,23 +338,44 @@ def log_slippage(token, chain, web3, file_handle):
     file_handle.write(f'"{token}": "{chain}"\n')
     file_handle.write(config.json.dumps(result, indent=4) + "\n\n")
 
-def find_files_with_error(folder_path):
-    def contains_error_key(obj):
+def find_files_with_error(folder_path, log_file="error_files_log.txt"):
+    import re
+    import os
+    import json
+
+    def contains_error_key(obj, filename, path="", collected_errors=None):
+        found = False
+
         if isinstance(obj, dict):
             for key, value in obj.items():
+                new_path = f"{path}.{key}" if path else key
                 if key.lower() == "error":
-                    # Ignore this specific known harmless message
+                    # Skip this specific benign message
                     if value != "Liquidity pool info could not be retrieved.":
-                        return True
-                if contains_error_key(value):
-                    return True
-        elif isinstance(obj, list):
-            for item in obj:
-                if contains_error_key(item):
-                    return True
-        return False
+                        # Try to extract reason like "Exception during XYZ (503)"
+                        reason_match = re.search(r"(Exception during .*?\(\d{3}\))", str(value))
+                        if reason_match:
+                            formatted = f"{filename} - {reason_match.group(1)}"
+                            collected_errors.append(formatted)
+                        else:
+                            # Fall back to using full error message if no match
+                            formatted = f"{filename} - {str(value)}"
+                            collected_errors.append(formatted)
+                        found = True
 
-    error_files = []
+                # Recurse into dict or list
+                if contains_error_key(value, filename, new_path, collected_errors):
+                    found = True
+
+        elif isinstance(obj, list):
+            for index, item in enumerate(obj):
+                new_path = f"{path}[{index}]"
+                if contains_error_key(item, filename, new_path, collected_errors):
+                    found = True
+
+        return found
+
+    collected_errors = []
 
     for filename in config.os.listdir(folder_path):
         if not filename.endswith(".json"):
@@ -368,10 +389,15 @@ def find_files_with_error(folder_path):
         except config.json.JSONDecodeError:
             continue  # Skip malformed JSON
 
-        if contains_error_key(data):
-            error_files.append(filename)
+        contains_error_key(data, filename.strip("[]"), collected_errors=collected_errors)
 
-    return error_files
+    # Optional: Write to file (commented out)
+    # log_path = config.os.path.join(folder_path, log_file)
+    # with open(log_path, "w") as log:
+    #     for line in collected_errors:
+    #         log.write(line + "\n")
+
+    return collected_errors
 
 import os
 import json
@@ -3593,8 +3619,65 @@ def main():
         "0x14778860e937f509e651192a90589de711fb88a9": "bsc"
     }
 
+    thedit = {
+        '0x0079c34bada93b2ff613913cde64e53ae6168fba': 'bsc',
+        '0x00c28144c95fbfa610415337df0579feb4860301': 'bsc',
+        '0x012eb702253b59e7ea8559830d6e5406cb4d84cc': 'bsc',
+        '0x0db6e4c01fdbdc93c8e33292578d82f65a10e1b2': 'bsc',
+        '0x1635984f4677e9dd1d9d2f42b8d10e1475699548': 'bsc',
+        '0x1fb0aa1790b303e1f00e3056cfcb9b2a5146c8cb': 'bsc',
+        '0x20b1c568c8149949df77c2d0e37459d3d0f743f0': 'bsc',
+        '0x346a7c1760df41575f9e95ac18b82bdb59b7b2b7': 'bsc',
+        '0x49b708b15dd277e4a39dea369c12e39cf67469cf': 'bsc',
+        '0x4ff2286a884e8ebd8cd1af4fb0643b19891ccddd': 'bsc',
+        '0x563b9e34a14f54e6668be89acbc2f6af639b6a72': 'bsc',
+        '0x57150481ec1c6c0fcbae97f9057368b0729f85f2': 'bsc',
+        '0x582f050e430efffd6139a4668a3ac5a7bde50f49': 'bsc',
+        '0x5a961f78aabee9d59e0baa0ff91f3f4a3722e5d1': 'bsc',
+        '0x5e111939a5b5a1d69f23cfadcd5e51a8e84808c1': 'bsc',
+        '0x6074eebd2f8f87152aa31ac1d675eac5274cf2cb': 'bsc',
+        '0x61624a9fb000a74b0d59eebdc5513eb58ce67f7b': 'bsc',
+        '0x62b2f7a849bced0c9973ad0353e4f13eb3fa6b04': 'bsc',
+        '0x6439cfe39646663b861ae2c253e9f5e8db983a89': 'bsc',
+        '0x6658e1ceaf9616503575e621f119f589e4c6b855': 'bsc',
+        '0x68ff4ba0cce9a4117b49d88d7bd281d136d353cc': 'bsc',
+        '0x6def75d571639852fac3bdea3c47780124795767': 'bsc',
+        '0x6e6419f8f848e970f3c7fad0894f3121294fb6b6': 'bsc',
+        '0x70205745313558b7a5dbfa92b7036131e71e2bb7': 'bsc',
+        '0x7fc027bdd86bccac037d7d8377fec4cd09087c8d': 'bsc',
+        '0x92b2b60c4b77b716946de8a1c39e5d7e4f5168d4': 'bsc',
+        '0x92d2cfc0e527f452a3196031b185b663641135ac': 'bsc',
+        '0x9fb6b0084b79e827ff6045da6b4e325b760e0769': 'bsc',
+        '0x9fcfc840624936784233dc97c38bf065e8a40583': 'bsc',
+        '0xa18c2ddfd910fdcbed6b011a70d3d1dc953ffd92': 'bsc',
+        '0xaf4ea81e5c5481c4dcc18f24d0cb3698f2b87e7b': 'bsc',
+        '0xb00eae75520f74146622016accc99d2b8b416d1b': 'bsc',
+        '0xb5a421019763f3a01b24996a9000ae3b076eca2f': 'bsc',
+        '0xbe7a3ee31f47692a88427a307c8ce32256d3234d': 'bsc',
+        '0xc0270eb749a082c857a8d7924052197933acf146': 'bsc',
+        '0xc094dde1f42805026d482ce6bd5fc607c1ff4bb8': 'bsc',
+        '0xc23a8b8e76b21d2c01e43f08050f6fbce28663a9': 'bsc',
+        '0xc6a65be0aa10aface49abcc374a84cfeb41a06cd': 'bsc',
+        '0xc760d3b6ec993c5d27bbe6c59ebb0ecf82f40fd5': 'bsc',
+        '0xc917159f17ac72c2b7291561ad565eb094131b6b': 'bsc',
+        '0xccdde094fe61fa36548981b448237e3b3358620c': 'bsc',
+        '0xcce91c1120bca4b69de531cf31d0fd6e365d880a': 'bsc',
+        '0xcdafd785a6698a4e5932cc11567f747ec4587cd1': 'bsc',
+        '0xd3a6c8bf99863c09c106f3b04aaf6f41bab2625c': 'bsc',
+        '0xdb25ba7cd0e966790fc8a878b49aa4a6c5cd3b3b': 'bsc',
+        '0xe1da0f20dd5c3d14fa10a1c42ab78bb2caace89a': 'bsc',
+        '0xe6b27c622edcdeb1101b6959b5c011e3da1c80bc': 'bsc',
+        '0xe7d11a084d093b0a076376898d522140c6c67661': 'bsc',
+        '0xe8c40ff1345a0f23ea52caf9291a4dc3d6773a21': 'bsc',
+        '0xf6ae5de7d32c222d5f0015cb4efd0389f72a2eb4': 'bsc',
+        '0xf84210b3f764fe9f40475c118ca37d26ceacc80d': 'eth'
+    }
+
+    for token,chain in config.tqdm(thedit.items(), desc="Analyzing tokens"):
+        analyze_token(token, chain)
+    return
     # count = 0
-    for token, chain in config.tqdm(toanalyze_good.items(), desc="Analyzing tokens"):
+    for token, chain in config.tqdm(toanalyze.items(), desc="Analyzing tokens"):
         # if count >= 1:
         #     break
         start = config.time.perf_counter()
@@ -3615,3 +3698,4 @@ if __name__ == '__main__':
 #add visualization
 #scoring system
 #in analyze_lp_security -> CHANGE WITH TOKEN START DATE vai a capire se tra le feature ce n'è una dominante per capire se un token è malevolo o no (estrazione feature dominante) da inserire dopo la parte di analisis
+

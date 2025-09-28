@@ -686,7 +686,7 @@ def get_unique_token_holders_API(token, chain, decimals, max_addresses=200):
     print(f"✅ Found {len(holders)} holders with non-zero balances.")
     return holders
 
-def get_unique_token_holders_moralis(token, chain, max_pages=2, delay_seconds=1):
+def get_unique_token_holders_moralis(token, chain, decimals, max_pages=2, delay_seconds=1):
     params = {
         "chain": chain,
         "order": "DESC",
@@ -725,8 +725,11 @@ def get_unique_token_holders_moralis(token, chain, max_pages=2, delay_seconds=1)
             break
 
         config.time.sleep(delay_seconds)  # simple rate limiter
+
+    scale = 10 ** decimals
+
     return {
-        entry['owner_address'].lower(): float(entry.get('balance', 0))
+        entry['owner_address'].lower(): float(entry.get('balance', 0)) / scale
         for entry in all_owners
         if float(entry.get('balance', 0)) > 0
     }
@@ -907,7 +910,7 @@ def holder_circulating_supply_analysis(holders,total_c_supply,owner,creator,deci
 
     return result
 
-def top10_analysis(holders: dict, total_supply,total_circulating,decimals):
+def top10_analysis(holders: dict, total_supply,total_circulating):
     """
     Returns a dictionary with:
     - top_10 holders (address, balance, percentage of supply)
@@ -943,7 +946,7 @@ def top10_analysis(holders: dict, total_supply,total_circulating,decimals):
         percentage_tot = (balance / total_supply) * 100 if total_supply else 0.0
         top_10_data.append({
             'address': addr,
-            'balance': balance / (10**decimals),
+            'balance': balance,
             'percentage_of_total_supply': percentage_tot,
             'percentage_of_circulating_supply': percentage_circ
         })
@@ -1088,7 +1091,9 @@ def is_token_suspicious_by_slippage(token_address: str, chain: str, web3, lp_add
     return {
         "is_suspicious": overall_suspicious,
         "first_abnormal_slippage_percent": first_abnormal_slippage_percent if percent_suspicious else None,
-        "first_abnormal_slippage_fixed": first_abnormal_slippage_fixed if fixed_suspicious else None
+        "first_abnormal_slippage_fixed": first_abnormal_slippage_fixed if fixed_suspicious else None,
+        "slippage_by_percent": max(percent_slippages) if percent_slippages else 0.0,
+        "slippage_by_fixed_input": max(fixed_slippages) if fixed_slippages else 0.0
     }
 
 def fetch_latest_tx_list(token_address, chain, count=2):
@@ -7284,60 +7289,10 @@ def get_dexscreener_price_liquidity_volume(token_address,chainId = 1):
     except (TypeError, ValueError):
         return None
 
-
-def get_quote_token_usd_price(token_address: str, chain: str, web3) -> float:
-    # Stablecoins assumed = 1 USD
-    for stable_addr in config.STABLECOINS[chain].values():
-        if token_address.lower() == stable_addr.lower():
-            return 1.0
-
-    if chain == "eth":
-        ref = config.REFERENCE_PAIRS["eth"]["weth_usdc"]
-    elif chain == "bsc":
-        ref = config.REFERENCE_PAIRS["bsc"]["wbnb_busd"]
-    else:
-        raise ValueError("Unsupported chain for reference pricing.")
-
-    pair = web3.eth.contract(
-        address=config.Web3.to_checksum_address(ref["pair"]),
-        abi=config.PAIR_ABI
-    )
-    reserves = pair.functions.getReserves().call()
-    token0 = pair.functions.token0().call()
-    token1 = pair.functions.token1().call()
-
-    token0_decimals = ref["token0_decimals"]
-    token1_decimals = ref["token1_decimals"]
-
-    # Normalize reserves
-    reserve0 = reserves[0] / (10 ** token0_decimals)
-    reserve1 = reserves[1] / (10 ** token1_decimals)
-
-    # Find which one is the stablecoin
-    if token0.lower() in [addr.lower() for addr in config.STABLECOINS[chain].values()]:
-        # token0 is stablecoin, token1 is the one being priced
-        stable_reserve = reserve0
-        target_reserve = reserve1
-    elif token1.lower() in [addr.lower() for addr in config.STABLECOINS[chain].values()]:
-        stable_reserve = reserve1
-        target_reserve = reserve0
-    else:
-        raise ValueError("No stablecoin found in reference pair.")
-
-    if target_reserve == 0:
-        return 0.0
-
-    price = stable_reserve / target_reserve
-
-    # Debug:
-    print(f"[USD PRICE DEBUG] {token_address} = ${price:.4f} (via pair {ref['pair']})")
-
-    return price
-
 def get_price_and_liquidity(pair_address: str, base_token_address: str, chain: str, web3, base_decimals=18, quote_decimals=18):
     try:
-
         pair = web3.eth.contract(address=config.Web3.to_checksum_address(pair_address), abi=config.PAIR_ABI)
+
         reserves = pair.functions.getReserves().call()
         token0 = pair.functions.token0().call()
         token1 = pair.functions.token1().call()
@@ -7353,7 +7308,7 @@ def get_price_and_liquidity(pair_address: str, base_token_address: str, chain: s
         else:
             raise ValueError("Base token not in this pair")
 
-        # Fetch decimals for both tokens BEFORE using reserves
+        # Fetch decimals dynamically if not provided
         base_decimals = get_token_decimals(base_token_address, web3)
         quote_decimals = get_token_decimals(quote_token, web3)
 
@@ -7361,7 +7316,51 @@ def get_price_and_liquidity(pair_address: str, base_token_address: str, chain: s
         base_reserve = base_reserve / (10 ** base_decimals)
         quote_reserve = quote_reserve / (10 ** quote_decimals)
 
-        quote_token_usd_price = get_quote_token_usd_price(quote_token, chain, web3)
+        # Check if quote token is a known stablecoin
+        stablecoins = config.STABLECOINS[chain].values()
+        if quote_token.lower() in [addr.lower() for addr in stablecoins]:
+            quote_token_usd_price = 1.0
+        else:
+            # Fetch from reference pair (merged version of get_quote_token_usd_price)
+            if chain == "eth":
+                ref = config.REFERENCE_PAIRS["eth"]["weth_usdc"]
+            elif chain == "bsc":
+                ref = config.REFERENCE_PAIRS["bsc"]["wbnb_busd"]
+            else:
+                print("Unsupported chain for reference pricing.")
+                return None
+
+            ref_pair = web3.eth.contract(
+                address=config.Web3.to_checksum_address(ref["pair"]),
+                abi=config.PAIR_ABI
+            )
+            ref_reserves = ref_pair.functions.getReserves().call()
+            ref_token0 = ref_pair.functions.token0().call()
+            ref_token1 = ref_pair.functions.token1().call()
+
+            ref_token0_decimals = ref["token0_decimals"]
+            ref_token1_decimals = ref["token1_decimals"]
+
+            reserve0 = ref_reserves[0] / (10 ** ref_token0_decimals)
+            reserve1 = ref_reserves[1] / (10 ** ref_token1_decimals)
+
+            if ref_token0.lower() in [addr.lower() for addr in stablecoins]:
+                stable_reserve = reserve0
+                target_reserve = reserve1
+            elif ref_token1.lower() in [addr.lower() for addr in stablecoins]:
+                stable_reserve = reserve1
+                target_reserve = reserve0
+            else:
+                raise ValueError("No stablecoin found in reference pair.")
+
+            if target_reserve == 0:
+                quote_token_usd_price = 0.0
+            else:
+                quote_token_usd_price = stable_reserve / target_reserve
+
+            # Debug
+            print(f"[USD PRICE DEBUG] {quote_token} = ${quote_token_usd_price:.4f} (via pair {ref['pair']})")
+
         price_usd = (quote_reserve / base_reserve) * quote_token_usd_price if base_reserve > 0 else 0
         liquidity_usd = (base_reserve * price_usd) + (quote_reserve * quote_token_usd_price)
 
@@ -7372,16 +7371,9 @@ def get_price_and_liquidity(pair_address: str, base_token_address: str, chain: s
             "quote_token_reserve": quote_reserve,
             "quote_token_usd_price": quote_token_usd_price
         }
+
     except Exception:
-        # Silently catch any exception, return None-filled dict
         return None
-        # return {
-        #     "price_usd": None,
-        #     "liquidity_usd": None,
-        #     "base_token_reserve": None,
-        #     "quote_token_reserve": None,
-        #     "quote_token_usd_price": None
-        # }
 
 def get_liquidity_to_marketcap_ratio(circulating_supply, price, liquidity, verbose=False):
     # Step 1: Get CoinGecko ID

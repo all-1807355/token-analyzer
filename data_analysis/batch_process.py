@@ -47,6 +47,7 @@ def process_token_analysis_json(file_path):
         'has_abi': bool(contract.get("abi")),
         'total_snippets': total_snippets,
         'honeypot_mechanics_number': patterns_found.get('honeypot_mechanics', {}).get('count', 0),
+        'minting_mechanics_number': patterns_found.get('minting_mechanics', {}).get('count',0),
         'ownership_manipulation_number': patterns_found.get('ownership_manipulation', {}).get('count', 0),
         'transfer_blocking_number': patterns_found.get('transfer_blocking', {}).get('count', 0),
         'stealth_fee_mechanics_number': patterns_found.get('stealth_fee_mechanics', {}).get('count', 0),
@@ -54,6 +55,7 @@ def process_token_analysis_json(file_path):
         'router_manipulation_number': patterns_found.get('router_manipulation', {}).get('count', 0),
         'balance_manipulation_number': patterns_found.get('balance_manipulation', {}).get('count', 0),
         'anti_analysis_features_number': patterns_found.get('anti_analysis_features', {}).get('count', 0),
+        'block_based_restrictions_number': patterns_found.get('block_based_restrictions', {}).get('count', 0),
         'emergency_functions_number': patterns_found.get('emergencyFunctions', {}).get('count', 0),
     }
     contract_data = {
@@ -229,7 +231,7 @@ def process_all_json_files(base_path="."):
 # Usage
 if __name__ == "__main__":
     # Process all JSON files
-    master_dataframes = process_all_json_files("../data/good_tokens")
+    master_dataframes = process_all_json_files("../badtokens_data_collection/new")
     
     if master_dataframes:
         # Access individual dataframes

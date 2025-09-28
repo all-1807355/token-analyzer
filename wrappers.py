@@ -173,7 +173,7 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
     report_lines.append("\nLiquidity Analysis\n-----------------\n")
     try:
         lp_address, pair_abi = utils.get_lp_pair(token_address,chain,web3)
-        data = utils.get_dexscreener_price_liquidity_volume(token_address)
+        data = None#utils.get_dexscreener_price_liquidity_volume(token_address)
         price = None
         liquidity = None
         creation = None
@@ -202,7 +202,7 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
             elif coingecko_id == None:
                 holders = results['analyses']['holder'].get('holders_list',None)
                 if holders == None:
-                    holders = utils.get_unique_token_holders_moralis(token_address,chain)
+                    holders = utils.get_unique_token_holders_moralis(token_address,chain,decimals)
                     if holders == None:
                         creation = utils.get_contract_creation_tx(token_address, chain)
                         creation_block = int(creation["blocknum"]) if creation else None
@@ -216,14 +216,13 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
                                 error_msg = "Failed to retrieve holders data."
                                 # results.setdefault('analyses', {}).setdefault('holders', {})['error'] = error_msg
                                 report_lines.append(f"⚠️ Liquidity analysis error: {error_msg}\n")
-                    total_supply = utils.get_total_supply_API(token_address,chain)
-                    if total_supply:
-                        decimals = utils.get_token_decimals(token_address,web3)
-                        total_supply = total_supply / (10 ** decimals)
-                    elif total_supply == None:
-                        decimals = utils.get_token_decimals(token_address,web3)
-                        total_supply = utils.get_total_supply_web3(token_address,web3,decimals)
-                    total_c_supply = utils.get_circulating_supply_estimate(token_address,chain,total_supply,holders)
+                total_supply = utils.get_total_supply_API(token_address,chain)
+                decimals = utils.get_token_decimals(token_address,web3)
+                if total_supply:
+                    total_supply = total_supply / (10 ** decimals)
+                elif total_supply == None:
+                    total_supply = utils.get_total_supply_web3(token_address,web3,decimals)
+                total_c_supply = utils.get_circulating_supply_estimate(token_address,chain,total_supply,holders)
         
         if creation == None:
             creation = utils.get_contract_creation_tx(lp_address,chain)
@@ -415,7 +414,7 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
         decimals = utils.get_token_decimals(token_address,web3)
         #NOTE only use others when moralis is not useable
         holders_list = None
-        holders_list = utils.get_unique_token_holders_moralis(token_address, chain)
+        holders_list = utils.get_unique_token_holders_moralis(token_address, chain,decimals)
         if not holders_list:
             holders_list = utils.get_unique_token_holders_API(token_address,chain,decimals)
             if not holders_list:
@@ -477,7 +476,7 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
         #         'compliant': len(flagged_holders) == 0
         #     }
         # }
-        top10_analysis_results = utils.top10_analysis(holders_list,total_supply, total_c_supply,decimals)
+        top10_analysis_results = utils.top10_analysis(holders_list,total_supply, total_c_supply)
         #     result = {
         #     'top_10_holders': top_10_data,
         #     'totals': {
@@ -522,8 +521,8 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
         results['analyses']['holder'] = {
             'total_holders': len(holders_list),
             'holders_list': enriched_dict,
-            'total_supply': total_supply / (10**decimals) if total_supply else 0.0,
-            'total_circulating_supply': total_c_supply / (10**decimals) if total_c_supply else 0.0,
+            'total_supply': total_supply if total_supply else 0.0,
+            'total_circulating_supply': total_c_supply if total_c_supply else 0.0,
             'owner': owner_dict,
             'creator': creator_dict,
             'holders_exceeding_5_percent_circulating': holder_analysis_results['flagged_holders'],
