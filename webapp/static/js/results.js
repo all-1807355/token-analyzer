@@ -48,12 +48,40 @@ document.addEventListener('DOMContentLoaded', async function() {
         sidebar.style.visibility = 'visible';
         requestAnimationFrame(() => sidebar.classList.add('visible'));
 
-        // Show model prediction
-        const modelPrediction = document.getElementById('model-prediction');
-        if (score && modelPrediction) {
-            const pct = Math.round(score.non_spam_probability * 100);
-            modelPrediction.textContent = 
-                `Prediction: ${score.prediction.toUpperCase()} (${pct}% confidence, ${score.confidence} confidence)`;
+        // Update model prediction display
+        if (score) {
+            // Update verdict text
+            const verdictText = document.getElementById('model-verdict-text');
+            const verdictClass = score.prediction === 'non-spam' ? 'safe-verdict' : 'risk-verdict';
+            verdictText.innerHTML = `
+                <strong>Verdict:</strong>
+                <span class="${verdictClass}">${score.prediction === 'non-spam' ? 'Safe Token' : 'High Risk Token'}</span>
+            `;
+
+            // Update confidence level
+            const confidenceElement = document.getElementById('model-confidence');
+            confidenceElement.textContent = score.confidence.charAt(0).toUpperCase() + score.confidence.slice(1);
+
+            // Update probabilities
+            const safeProb = (score.non_spam_probability * 100).toFixed(1);
+            const riskProb = (score.spam_probability * 100).toFixed(1);
+
+            document.getElementById('safe-probability').textContent = `${safeProb}%`;
+            document.getElementById('risk-probability').textContent = `${riskProb}%`;
+
+            document.getElementById('safe-prob-bar').style.width = `${safeProb}%`;
+            document.getElementById('risk-prob-bar').style.width = `${riskProb}%`;
+
+            // Update decision score
+            const scoreElement = document.getElementById('model-score');
+            const normalizedScore = Math.round(50 + (score.decision_score * 25));
+            const clampedScore = Math.max(0, Math.min(100, normalizedScore));
+            
+            scoreElement.textContent = clampedScore;
+            scoreElement.className = 'score-value ' + 
+                (clampedScore >= 70 ? 'score-high' : 
+                 clampedScore >= 40 ? 'score-medium' : 
+                 'score-low');
         }
 
         // Display glance indicators

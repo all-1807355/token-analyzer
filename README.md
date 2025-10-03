@@ -2,16 +2,29 @@
 
 
 # TODO
-Scrivi la procedura che hai usato per implementare tutte le metriche -> crea un nuovo documento o aggiorna quello precedente
+aggiungere tilde alle reference con citazioni
+figura 7.9 riduci dimensione
+reference a TUTTE le immagini
 
-grafici ok?
-metriche ok?
-quanto deve essere lunga la tesi?
-va bene come l'ho divisa?
-parte di literature review? quanto devo essere specifico?
+un capitolo a parte per risultati machine learning e per l'implementazione
+così uno vede quello che gli interessa. 
+metodologie, implementazione e risultati PER CIASCUNO:
+metriche, tool e modello
 
-- l'analisi dei contratti risulta inconclusive per quanto riguarda le metriche che fanno analisi statica
+7.26 stampa col nome della metrica
+coefficiente di gini usato??
 
+
+- unica sezione conclusione con discussione
+future work dopo conclusioni
+niente subsection nel future work
+
+avrò un controrelatore mandagli il teso
+
+repo su git come OPEN
+rilasciato il codice su github e metti il link NELLA TESI
+
+POCO TESTO nelle slide, immagini evocative. che mandano un messaggio. la commissione deve avere l'attenzione catturata. non devo leggere le slide.
 
 
 ## Getting started
