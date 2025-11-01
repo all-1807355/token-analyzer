@@ -1,55 +1,6 @@
 import wrappers,config,utils
 
 """----------------------------------------"""
-def process_csv(input_csv, output_csv, process_first_n=10):
-    # Open and read the input CSV file
-    with open(input_csv, newline='', encoding='utf-8') as infile:
-        reader = config.csv.DictReader(infile)
-        # Prepare output data structure
-        output_data = []
-        line_count = 0
-        # Iterate through each row in the CSV
-        for row in reader:
-            if line_count >= process_first_n:
-                break
-            token_address = row['token_address']
-            blockchain = row['blockchain']
-            
-            # Run the analysis for each token address
-            analysis_result = analyze_token(token_address, blockchain)
-            
-            # Extract relevant data from the JSON result, using .get() to handle missing keys safely
-            analysis = analysis_result['analyses']
-            row_data = {
-                'token_address': token_address,
-                'contract_info': config.json.dumps(analysis.get('contract', {}).get('info', "")),
-                'contract_verified': analysis.get('contract', {}).get('verified', ""),
-                'contract_owner': analysis.get('contract', {}).get('owner', ""),
-                'holders_total': analysis.get('holders', {}).get('total_holders', ""),
-                'holders_compliant': analysis.get('holders', {}).get('summary', {}).get('compliant', ""),
-                'liquidity_error': analysis.get('liquidity', {}).get('error', ""),
-                'security_warnings': config.json.dumps(analysis.get('security', {}).get('warnings', "")),
-                'security_suspicious_urls': config.json.dumps(analysis.get('security', {}).get('suspicious_urls', "")),
-                'security_suspicious_addresses': config.json.dumps(analysis.get('security', {}).get('suspicious_addresses', "")),
-                'lifecycle_creation_date': analysis.get('lifecycle', {}).get('token_creation_date', ""),
-                'lifecycle_inactive_days': analysis.get('lifecycle', {}).get('inactive_days', "")
-            }
-            output_data.append(row_data)
-            line_count +=1
-        # Write the output data to the new CSV file
-        fieldnames = [
-            'token_address', 'contract_info', 'contract_verified', 'contract_owner',
-            'holders_total', 'holders_compliant', 'liquidity_error', 
-            'security_warnings', 'security_suspicious_urls', 'security_suspicious_addresses',
-            'lifecycle_creation_date', 'lifecycle_inactive_days'
-        ]
-        
-        with open(output_csv, mode='w', newline='', encoding='utf-8') as outfile:
-            writer = config.csv.DictWriter(outfile, fieldnames=fieldnames)
-            writer.writeheader()
-            for data in output_data:
-                writer.writerow(data)
-
 def analyze_token(token_address: str, chain: str,analysis_types: list = None) -> dict:
 
     print(f"\nStarting Analysis of token {token_address} on chain {chain} of types {"full" if analysis_types == None else analysis_types}!")
@@ -331,161 +282,6 @@ def evaluate_token_safety(data):
         "rating": rating,
         "effective_slippage_rate_percent": slippage
     }
-
-def log_slippage(token, chain, web3, file_handle):
-    result = utils.is_token_suspicious_by_slippage(token, chain, web3)
-    
-    file_handle.write(f'"{token}": "{chain}"\n')
-    file_handle.write(config.json.dumps(result, indent=4) + "\n\n")
-
-def find_files_with_error(folder_path, log_file="error_files_log.txt"):
-    import re
-    import os
-    import json
-
-    def contains_error_key(obj, filename, path="", collected_errors=None):
-        found = False
-
-        if isinstance(obj, dict):
-            for key, value in obj.items():
-                new_path = f"{path}.{key}" if path else key
-                if key.lower() == "error":
-                    # Skip this specific benign message
-                    if value != "Liquidity pool info could not be retrieved.":
-                        # Try to extract reason like "Exception during XYZ (503)"
-                        reason_match = re.search(r"(Exception during .*?\(\d{3}\))", str(value))
-                        if reason_match:
-                            formatted = f"{filename} - {reason_match.group(1)}"
-                            collected_errors.append(formatted)
-                        else:
-                            # Fall back to using full error message if no match
-                            formatted = f"{filename} - {str(value)}"
-                            collected_errors.append(formatted)
-                        found = True
-
-                # Recurse into dict or list
-                if contains_error_key(value, filename, new_path, collected_errors):
-                    found = True
-
-        elif isinstance(obj, list):
-            for index, item in enumerate(obj):
-                new_path = f"{path}[{index}]"
-                if contains_error_key(item, filename, new_path, collected_errors):
-                    found = True
-
-        return found
-
-    collected_errors = []
-
-    for filename in config.os.listdir(folder_path):
-        if not filename.endswith(".json"):
-            continue
-
-        file_path = config.os.path.join(folder_path, filename)
-
-        try:
-            with open(file_path, 'r') as f:
-                data = config.json.load(f)
-        except config.json.JSONDecodeError:
-            continue  # Skip malformed JSON
-
-        contains_error_key(data, filename.strip("[]"), collected_errors=collected_errors)
-
-    # Optional: Write to file (commented out)
-    # log_path = config.os.path.join(folder_path, log_file)
-    # with open(log_path, "w") as log:
-    #     for line in collected_errors:
-    #         log.write(line + "\n")
-
-    return collected_errors
-
-import os
-import json
-
-def load_tokens_from_folder(folder_path, chain, max_tokens=500):
-    tokens = {}
-    
-    for token_dir in os.listdir(folder_path):
-        token_path = os.path.join(folder_path, token_dir)
-        if not os.path.isdir(token_path):
-            continue
-        
-        info_json_path = os.path.join(token_path, 'info.json')
-        if not os.path.isfile(info_json_path):
-            continue
-        
-        try:
-            with open(info_json_path, 'r', encoding='utf-8') as f:
-                info = json.load(f)
-        except Exception:
-            continue
-        
-        address = info.get('id') or info.get('address') or token_dir
-        if not address:
-            continue
-        address = address.lower()
-        
-        status = info.get('status', '').strip().lower()
-        if status != 'active':
-            continue
-        
-        if address not in tokens:
-            tokens[address] = chain
-        
-        if len(tokens) >= max_tokens:
-            break
-    
-    return tokens
-
-def create_token_dictionary(eth_folder, bsc_folder):
-    eth_tokens = load_tokens_from_folder(eth_folder, 'eth', 500)
-    bsc_tokens = load_tokens_from_folder(bsc_folder, 'bsc', 500)
-
-    # Remove duplicates in BSC if present in ETH
-    for address in list(bsc_tokens.keys()):
-        if address in eth_tokens:
-            del bsc_tokens[address]
-
-    combined_tokens = {**eth_tokens, **bsc_tokens}
-    return combined_tokens
-
-def get_burned_from_events(token_address, web3, start_block, end_block, decimals=18):
-    token_address = web3.to_checksum_address(token_address)
-    burned_raw = 0
-
-    # Keccak-256 hash of the Transfer(address,address,uint256) event signature
-    TRANSFER_EVENT_SIGNATURE = web3.keccak(text="Transfer(address,address,uint256)").hex()
-
-    BURN_ADDRESSES = [
-        "0x0000000000000000000000000000000000000000",
-        "0x000000000000000000000000000000000000dEaD",
-    ]
-
-    def address_to_topic(addr):
-        # Strip '0x', lowercase, then left-pad with zeros to 64 chars and add '0x' prefix
-        return "0x" + addr.lower().replace("0x", "").rjust(64, '0')
-
-    for burn_addr in BURN_ADDRESSES:
-        topic_burn_addr = address_to_topic(burn_addr)
-
-        logs = web3.eth.get_logs({
-            "fromBlock": start_block,
-            "toBlock": end_block,
-            "address": token_address,
-            "topics": [
-                TRANSFER_EVENT_SIGNATURE,  # topic0: event signature
-                None,                     # topic1: from address (any)
-                topic_burn_addr           # topic2: to address (burn address)
-            ]
-        })
-
-        for log in logs:
-            # 'data' is the amount transferred in hex string, e.g. '0x...'
-            value = int(log['data'], 16)
-            burned_raw += value
-
-    burned_human = burned_raw / (10 ** decimals)
-    return burned_human
 
 def main():
 
@@ -2615,7 +2411,7 @@ def main():
         '0x2a294acC7a6EaE21b72F3b66C70125F921747B53': 'bsc',
         '0x29a63F4B209C29B4DC47f06FFA896F32667DAD2C': 'bsc'
     }
-
+    #the list of non-malicious tokens used (1000)
     toanalyze_good = {
         "0xa49d7499271ae71cd8ab9ac515e6694c755d400c": "eth",
         "0xc18c07a18198a6340cf4d94855fe5eb6dd33b46e": "eth",
@@ -3618,64 +3414,7 @@ def main():
         "0x868fced65edbf0056c4163515dd840e9f287a4c3": "bsc",
         "0x14778860e937f509e651192a90589de711fb88a9": "bsc"
     }
-
-    thedit = {
-        '0x0079c34bada93b2ff613913cde64e53ae6168fba': 'bsc',
-        '0x00c28144c95fbfa610415337df0579feb4860301': 'bsc',
-        '0x012eb702253b59e7ea8559830d6e5406cb4d84cc': 'bsc',
-        '0x0db6e4c01fdbdc93c8e33292578d82f65a10e1b2': 'bsc',
-        '0x1635984f4677e9dd1d9d2f42b8d10e1475699548': 'bsc',
-        '0x1fb0aa1790b303e1f00e3056cfcb9b2a5146c8cb': 'bsc',
-        '0x20b1c568c8149949df77c2d0e37459d3d0f743f0': 'bsc',
-        '0x346a7c1760df41575f9e95ac18b82bdb59b7b2b7': 'bsc',
-        '0x49b708b15dd277e4a39dea369c12e39cf67469cf': 'bsc',
-        '0x4ff2286a884e8ebd8cd1af4fb0643b19891ccddd': 'bsc',
-        '0x563b9e34a14f54e6668be89acbc2f6af639b6a72': 'bsc',
-        '0x57150481ec1c6c0fcbae97f9057368b0729f85f2': 'bsc',
-        '0x582f050e430efffd6139a4668a3ac5a7bde50f49': 'bsc',
-        '0x5a961f78aabee9d59e0baa0ff91f3f4a3722e5d1': 'bsc',
-        '0x5e111939a5b5a1d69f23cfadcd5e51a8e84808c1': 'bsc',
-        '0x6074eebd2f8f87152aa31ac1d675eac5274cf2cb': 'bsc',
-        '0x61624a9fb000a74b0d59eebdc5513eb58ce67f7b': 'bsc',
-        '0x62b2f7a849bced0c9973ad0353e4f13eb3fa6b04': 'bsc',
-        '0x6439cfe39646663b861ae2c253e9f5e8db983a89': 'bsc',
-        '0x6658e1ceaf9616503575e621f119f589e4c6b855': 'bsc',
-        '0x68ff4ba0cce9a4117b49d88d7bd281d136d353cc': 'bsc',
-        '0x6def75d571639852fac3bdea3c47780124795767': 'bsc',
-        '0x6e6419f8f848e970f3c7fad0894f3121294fb6b6': 'bsc',
-        '0x70205745313558b7a5dbfa92b7036131e71e2bb7': 'bsc',
-        '0x7fc027bdd86bccac037d7d8377fec4cd09087c8d': 'bsc',
-        '0x92b2b60c4b77b716946de8a1c39e5d7e4f5168d4': 'bsc',
-        '0x92d2cfc0e527f452a3196031b185b663641135ac': 'bsc',
-        '0x9fb6b0084b79e827ff6045da6b4e325b760e0769': 'bsc',
-        '0x9fcfc840624936784233dc97c38bf065e8a40583': 'bsc',
-        '0xa18c2ddfd910fdcbed6b011a70d3d1dc953ffd92': 'bsc',
-        '0xaf4ea81e5c5481c4dcc18f24d0cb3698f2b87e7b': 'bsc',
-        '0xb00eae75520f74146622016accc99d2b8b416d1b': 'bsc',
-        '0xb5a421019763f3a01b24996a9000ae3b076eca2f': 'bsc',
-        '0xbe7a3ee31f47692a88427a307c8ce32256d3234d': 'bsc',
-        '0xc0270eb749a082c857a8d7924052197933acf146': 'bsc',
-        '0xc094dde1f42805026d482ce6bd5fc607c1ff4bb8': 'bsc',
-        '0xc23a8b8e76b21d2c01e43f08050f6fbce28663a9': 'bsc',
-        '0xc6a65be0aa10aface49abcc374a84cfeb41a06cd': 'bsc',
-        '0xc760d3b6ec993c5d27bbe6c59ebb0ecf82f40fd5': 'bsc',
-        '0xc917159f17ac72c2b7291561ad565eb094131b6b': 'bsc',
-        '0xccdde094fe61fa36548981b448237e3b3358620c': 'bsc',
-        '0xcce91c1120bca4b69de531cf31d0fd6e365d880a': 'bsc',
-        '0xcdafd785a6698a4e5932cc11567f747ec4587cd1': 'bsc',
-        '0xd3a6c8bf99863c09c106f3b04aaf6f41bab2625c': 'bsc',
-        '0xdb25ba7cd0e966790fc8a878b49aa4a6c5cd3b3b': 'bsc',
-        '0xe1da0f20dd5c3d14fa10a1c42ab78bb2caace89a': 'bsc',
-        '0xe6b27c622edcdeb1101b6959b5c011e3da1c80bc': 'bsc',
-        '0xe7d11a084d093b0a076376898d522140c6c67661': 'bsc',
-        '0xe8c40ff1345a0f23ea52caf9291a4dc3d6773a21': 'bsc',
-        '0xf6ae5de7d32c222d5f0015cb4efd0389f72a2eb4': 'bsc',
-        '0xf84210b3f764fe9f40475c118ca37d26ceacc80d': 'eth'
-    }
-
-    for token,chain in config.tqdm(thedit.items(), desc="Analyzing tokens"):
-        analyze_token(token, chain)
-    return
+    
     # count = 0
     for token, chain in config.tqdm(toanalyze.items(), desc="Analyzing tokens"):
         # if count >= 1:
@@ -3688,14 +3427,3 @@ def main():
     return
 if __name__ == '__main__': 
     main()
-
-#TODO modify get_circulating_supply function by inserting the mapping containing all values of circulating supply you retrieved.
-#TODO REDO holder analysis and liquidity analysis.
-#TODO check slippage function and values again
-
-
-#modify effective slippage rate, no need to consider the price.
-#add visualization
-#scoring system
-#in analyze_lp_security -> CHANGE WITH TOKEN START DATE vai a capire se tra le feature ce n'è una dominante per capire se un token è malevolo o no (estrazione feature dominante) da inserire dopo la parte di analisis
-

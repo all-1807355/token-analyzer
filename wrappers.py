@@ -202,7 +202,7 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
             elif coingecko_id == None:
                 holders = results['analyses']['holder'].get('holders_list',None)
                 if holders == None:
-                    holders = utils.get_unique_token_holders_moralis(token_address,chain,decimals)
+                    #holders = utils.get_unique_token_holders_moralis(token_address,chain,decimals)
                     if holders == None:
                         creation = utils.get_contract_creation_tx(token_address, chain)
                         creation_block = int(creation["blocknum"]) if creation else None
@@ -232,6 +232,7 @@ def liquidity_analysis(token_address: str, chain: str, results: dict, report_lin
         else:
             creation_timestamp = None
             creation_blocknum = None
+        #goplus api to get liquidity data
         liquidity_status = utils.analyze_lp_security(token_address,chain)
         if not liquidity_status:
             error_msg = "Liquidity pool info could not be retrieved."
@@ -414,7 +415,7 @@ def holder_analysis(token_address: str, chain: str, results: dict, report_lines:
         decimals = utils.get_token_decimals(token_address,web3)
         #NOTE only use others when moralis is not useable
         holders_list = None
-        holders_list = utils.get_unique_token_holders_moralis(token_address, chain,decimals)
+        #holders_list = utils.get_unique_token_holders_moralis(token_address, chain,decimals)
         if not holders_list:
             holders_list = utils.get_unique_token_holders_API(token_address,chain,decimals)
             if not holders_list:
